@@ -34,6 +34,9 @@ PYBIND11_MODULE(pypto_core, m) {
   // Register testing utilities (exposed as pypto.testing)
   pypto::python::BindTesting(m);
 
+  // Register IR (Intermediate Representation) bindings
+  pypto::python::BindIR(m);
+
   // Future bindings can be added here:
   // pypto::python::BindTensors(m);
   // pypto::python::BindOps(m);

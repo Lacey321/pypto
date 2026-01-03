@@ -13,8 +13,8 @@ PyPTO - Python Tensor Operations Library
 This package provides Python bindings for the PyPTO C++ library.
 """
 
-from .pypto_core import testing
+from .pypto_core import ir, testing
 
-__all__ = ["testing"]
+__all__ = ["testing", "ir"]
 
 __version__ = "0.1.0"

@@ -69,7 +69,7 @@ struct StackFrame {
    * @brief Formats the stack frame as a human-readable string
    * @return String representation in the format "function (filename:lineno)"
    */
-  std::string to_string() const;
+  [[nodiscard]] std::string to_string() const;
 };
 
 /**
@@ -178,19 +178,19 @@ class Error : public std::runtime_error {
    * @brief Get the raw stack trace frames
    * @return Const reference to the vector of captured stack frames
    */
-  const std::vector<StackFrame>& GetStackTrace() const { return stack_trace_; }
+  [[nodiscard]] const std::vector<StackFrame>& GetStackTrace() const { return stack_trace_; }
 
   /**
    * @brief Get a formatted string representation of the stack trace
    * @return Multi-line string with each stack frame on a separate line
    */
-  std::string GetFormattedStackTrace() const;
+  [[nodiscard]] std::string GetFormattedStackTrace() const;
 
   /**
    * @brief Get the complete error message including the stack trace
    * @return String containing both the error message and formatted stack trace
    */
-  std::string GetFullMessage() const;
+  [[nodiscard]] std::string GetFullMessage() const;
 
  private:
   std::vector<StackFrame> stack_trace_;  ///< Captured stack frames at error creation

@@ -47,6 +47,16 @@ void BindErrors(pybind11::module_& m);
  */
 void BindTesting(pybind11::module_& m);
 
+/**
+ * @brief Register IR (Intermediate Representation) classes
+ *
+ * Registers all IR node classes including Span, IRNodeNode, Expr, Var, Const,
+ * BinaryExpr, and all binary operations (Add, Sub, Mul, Div, Mod).
+ *
+ * @param m The pybind11 module object
+ */
+void BindIR(pybind11::module_& m);
+
 // Future binding declarations can be added here:
 // void BindTensors(pybind11::module_& m);
 // void BindOps(pybind11::module_& m);

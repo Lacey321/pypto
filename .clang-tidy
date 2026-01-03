@@ -23,7 +23,6 @@ Checks: >
   -modernize-concat-nested-namespaces,
   -modernize-return-braced-init-list,
   -modernize-use-auto,
-  -modernize-use-nodiscard,
   -modernize-use-trailing-return-type,
   -performance-enum-size
 

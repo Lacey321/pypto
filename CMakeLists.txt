@@ -70,6 +70,7 @@ add_dependencies(libbacktrace project_libbacktrace)
 set(PYPTO_SOURCES
     src/core/backtrace.cpp
     src/core/error.cpp
+    src/ir/core.cpp
 )
 
 # Include Python bindings

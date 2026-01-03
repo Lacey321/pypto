@@ -14,5 +14,89 @@ This package provides Python bindings for the PyPTO C++ library.
 """
 
 from . import testing
+from .ir import (
+    Abs,
+    Add,
+    And,
+    BinaryExpr,
+    BitAnd,
+    BitNot,
+    BitOr,
+    BitShiftLeft,
+    BitShiftRight,
+    BitXor,
+    Call,
+    ConstInt,
+    Eq,
+    Expr,
+    FloatDiv,
+    FloorDiv,
+    FloorMod,
+    Ge,
+    Gt,
+    IRNode,
+    Le,
+    Lt,
+    Max,
+    Min,
+    Mul,
+    Ne,
+    Neg,
+    Not,
+    Op,
+    Or,
+    Pow,
+    Span,
+    Sub,
+    UnaryExpr,
+    Var,
+    Xor,
+)
 
-__all__ = ["testing"]
+__all__ = [
+    "testing",
+    # Core IR types
+    "Span",
+    "Op",
+    "IRNode",
+    "Expr",
+    # Expression types
+    "Var",
+    "ConstInt",
+    "Call",
+    # Base expression types
+    "BinaryExpr",
+    "UnaryExpr",
+    # Arithmetic binary operations
+    "Add",
+    "Sub",
+    "Mul",
+    "FloorDiv",
+    "FloorMod",
+    "FloatDiv",
+    "Min",
+    "Max",
+    "Pow",
+    # Comparison operations
+    "Eq",
+    "Ne",
+    "Lt",
+    "Le",
+    "Gt",
+    "Ge",
+    # Logical operations
+    "And",
+    "Or",
+    "Xor",
+    "Not",
+    # Bitwise operations
+    "BitAnd",
+    "BitOr",
+    "BitXor",
+    "BitShiftLeft",
+    "BitShiftRight",
+    "BitNot",
+    # Unary operations
+    "Abs",
+    "Neg",
+]

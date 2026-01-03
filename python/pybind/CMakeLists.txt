@@ -13,6 +13,7 @@ set(PYPTO_BINDING_SOURCES
     pybind.cpp
     modules/error.cpp
     modules/testing.cpp
+    modules/ir.cpp
 )
 
 # Make paths absolute

@@ -13,20 +13,22 @@ Type stubs for pypto.testing submodule
 Internal testing utilities (do not use in production)
 """
 
-def raise_value_error(message: str) -> None:
+from typing import NoReturn
+
+def raise_value_error(message: str) -> NoReturn:
     """Raise a ValueError from C++ for testing error handling"""
 
-def raise_type_error(message: str) -> None:
+def raise_type_error(message: str) -> NoReturn:
     """Raise a TypeError from C++ for testing error handling"""
 
-def raise_runtime_error(message: str) -> None:
+def raise_runtime_error(message: str) -> NoReturn:
     """Raise a RuntimeError from C++ for testing error handling"""
 
-def raise_not_implemented_error(message: str) -> None:
+def raise_not_implemented_error(message: str) -> NoReturn:
     """Raise a NotImplementedError from C++ for testing error handling"""
 
-def raise_index_error(message: str) -> None:
+def raise_index_error(message: str) -> NoReturn:
     """Raise an IndexError from C++ for testing error handling"""
 
-def raise_generic_error(message: str) -> None:
+def raise_generic_error(message: str) -> NoReturn:
     """Raise a generic Error from C++ for testing error handling"""
