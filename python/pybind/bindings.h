@@ -48,6 +48,15 @@ void BindErrors(pybind11::module_& m);
 void BindTesting(pybind11::module_& m);
 
 /**
+ * @brief Register core types and utilities
+ *
+ * Registers core PyPTO types including DataType enum and related utility functions.
+ *
+ * @param m The pybind11 module object
+ */
+void BindCore(pybind11::module_& m);
+
+/**
  * @brief Register IR (Intermediate Representation) classes
  *
  * Registers all IR node classes including Span, IRNodeNode, Expr, Var, Const,

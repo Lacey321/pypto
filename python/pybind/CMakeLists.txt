@@ -12,6 +12,7 @@
 set(PYPTO_BINDING_SOURCES
     pybind.cpp
     modules/error.cpp
+    modules/core.cpp
     modules/testing.cpp
     modules/ir.cpp
 )

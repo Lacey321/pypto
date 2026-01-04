@@ -13,8 +13,71 @@ PyPTO - Python Tensor Operations Library
 This package provides Python bindings for the PyPTO C++ library.
 """
 
-from .pypto_core import ir, testing
+from typing import cast
 
-__all__ = ["testing", "ir"]
+from .pypto_core import (
+    DataType,
+    dtype_to_string,
+    get_dtype_bit,
+    ir,
+    is_float,
+    is_int,
+    is_signed_int,
+    is_unsigned_int,
+    testing,
+)
+
+# Convenient dtype constants
+DT_BOOL: DataType = cast(DataType, DataType.BOOL)
+DT_INT4: DataType = cast(DataType, DataType.INT4)
+DT_INT8: DataType = cast(DataType, DataType.INT8)
+DT_INT16: DataType = cast(DataType, DataType.INT16)
+DT_INT32: DataType = cast(DataType, DataType.INT32)
+DT_INT64: DataType = cast(DataType, DataType.INT64)
+DT_UINT4: DataType = cast(DataType, DataType.UINT4)
+DT_UINT8: DataType = cast(DataType, DataType.UINT8)
+DT_UINT16: DataType = cast(DataType, DataType.UINT16)
+DT_UINT32: DataType = cast(DataType, DataType.UINT32)
+DT_UINT64: DataType = cast(DataType, DataType.UINT64)
+DT_FP4: DataType = cast(DataType, DataType.FP4)
+DT_FP8: DataType = cast(DataType, DataType.FP8)
+DT_FP16: DataType = cast(DataType, DataType.FP16)
+DT_FP32: DataType = cast(DataType, DataType.FP32)
+DT_BF16: DataType = cast(DataType, DataType.BF16)
+DT_HF4: DataType = cast(DataType, DataType.HF4)
+DT_HF8: DataType = cast(DataType, DataType.HF8)
+
+__all__ = [
+    # Modules
+    "testing",
+    "ir",
+    # DataType enum and utilities
+    "DataType",
+    "get_dtype_bit",
+    "dtype_to_string",
+    "is_float",
+    "is_signed_int",
+    "is_unsigned_int",
+    "is_int",
+    # Dtype constants
+    "DT_BOOL",
+    "DT_INT4",
+    "DT_INT8",
+    "DT_INT16",
+    "DT_INT32",
+    "DT_INT64",
+    "DT_UINT4",
+    "DT_UINT8",
+    "DT_UINT16",
+    "DT_UINT32",
+    "DT_UINT64",
+    "DT_FP4",
+    "DT_FP8",
+    "DT_FP16",
+    "DT_FP32",
+    "DT_BF16",
+    "DT_HF4",
+    "DT_HF8",
+]
 
 __version__ = "0.1.0"

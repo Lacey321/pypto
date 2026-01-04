@@ -31,6 +31,9 @@ PYBIND11_MODULE(pypto_core, m) {
   // Register error handling bindings
   pypto::python::BindErrors(m);
 
+  // Register core types (DataType enum and utilities)
+  pypto::python::BindCore(m);
+
   // Register testing utilities (exposed as pypto.testing)
   pypto::python::BindTesting(m);
 
