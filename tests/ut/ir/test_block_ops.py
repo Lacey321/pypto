@@ -172,12 +172,13 @@ class TestBlockReductionOps:
 
         with ib.function("test_block_sum") as f:
             input_tensor = f.param("input", ir.TensorType([128, 128], DataType.FP32))
-            output_tensor = f.param("output", ir.TensorType([128, 1], DataType.FP32))
-            f.return_type(ir.TensorType([128, 1], DataType.FP32))
+            output_tensor = f.param("output", ir.TensorType([128], DataType.FP32))
+            f.return_type(ir.TensorType([128], DataType.FP32))
 
             tile_in = ib.let("tile_in", block.ub_copy_in(input_tensor, 0, 0, 32, 128))
-            # Sum along axis 1 (columns), result shape should be (32, 1) with keepdim=True
-            tile_sum = ib.let("tile_sum", block.sum(tile_in, axis=1, keepdim=True))
+            # Sum along axis 1 (columns), result shape should be (32,) with keepdim=False
+            tile_sum = ib.let("tile_sum", block.sum(tile_in, axis=1, keepdim=False))
+            # Copy the reduced 1D tile back; width is set to 1 for the slice
             result = ib.let("result", block.ub_copy_out(tile_sum, 0, 0, 32, 1, output_tensor))
             ib.return_stmt(result)
 
