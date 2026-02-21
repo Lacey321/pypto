@@ -7,7 +7,7 @@ description: Create a GitHub pull request after committing, rebasing, and pushin
 
 ## Prerequisites
 
-⚠️ **Run `/git-commit` skill first** to commit all changes.
+⚠️ **MANDATORY**: Use the `/git-commit` skill to commit all changes. This runs the full code review, testing, and linting workflow. Do not commit directly.
 
 ## Workflow Steps
 
