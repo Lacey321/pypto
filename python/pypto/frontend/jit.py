@@ -490,7 +490,7 @@ def _build_bisheng_flags(toolkit_home: str, arch: str) -> list[str]:
     raise ValueError(f"Unsupported arch for _build_bisheng_flags: {arch}")
 
 
-def compile(prog, clean_up=False, timeout=20, arch: str = "dav-c220", has_cross_sync = False):
+def compile(prog, clean_up=False, timeout=20, arch: str = "dav-c220"):
     """Compile a PTO program to a shared library.
 
     Args:
