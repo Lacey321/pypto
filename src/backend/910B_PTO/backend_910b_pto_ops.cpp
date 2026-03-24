@@ -942,8 +942,8 @@ static std::string MakeSystemSyncAllCodegenPTO(const CallPtr& op, codegen::Codeg
     // AIC
     oss << "pto.section.cube {" << "\n      "
         << "pto.sync.wait #pto.pipe<PIPE_MTE3>, " << SYNC_AIV_FLAG << "\n      "
-        << "pto.sync.set #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
-        << "pto.sync.wait #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
+        // << "pto.sync.set #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
+        // << "pto.sync.wait #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
         << "pto.sync.set #pto.pipe<PIPE_MTE3>, " << SYNC_AIC_AIV_FLAG << "\n    }";
     codegen.Emit(oss.str());
     // AIV
@@ -982,8 +982,8 @@ static std::string MakeSystemSyncAllCodegenPTO(const CallPtr& op, codegen::Codeg
     oss << "pto.section.cube {" << "\n      "
         << "pto.sync.wait #pto.pipe<PIPE_S>, " << SYNC_AIV_FLAG << "\n      "
         << "pto.sync.wait #pto.pipe<PIPE_S>, " << (SYNC_AIV_FLAG + SYNC_FLAG_ID_MAX) << "\n      "
-        << "pto.sync.set #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
-        << "pto.sync.wait #pto.pipe<PIPE_S>, " << SYNC_AIC_FLAG << "\n      "
+        // << "pto.sync.set #pto.pipe<PIPE_FIX>, " << SYNC_AIC_FLAG << "\n      "
+        // << "pto.sync.wait #pto.pipe<PIPE_S>, " << SYNC_AIC_FLAG << "\n      "
         << "pto.sync.set #pto.pipe<PIPE_MTE3>, " << SYNC_AIC_AIV_FLAG << "\n      "
         << "pto.sync.set #pto.pipe<PIPE_MTE3>, " << (SYNC_AIC_AIV_FLAG + SYNC_FLAG_ID_MAX) << "\n    }";
     codegen.Emit(oss.str());
