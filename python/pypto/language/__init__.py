@@ -115,9 +115,11 @@ from .op.block_ops import (
     vec_move,
     xor,
     xors,
+    getval,
+    setval,
 )
 from .op.ptr_ops import addptr, make_tensor
-from .op.tensor_ops import assemble, create_tensor, dim
+from .op.tensor_ops import assemble, create_tensor, dim, getval, setval
 from .op.unified_ops import (
     add,
     cast,
@@ -271,10 +273,14 @@ __all__ = [
     "lrelu",
     "sel",
     "sels",
+    "getval",
+    "setval",
     # Promoted tensor-only
     "create_tensor",
     "assemble",
     "dim",
+    "getval",
+    "setval",
     # Ptr ops
     "make_tensor",
     "addptr",
