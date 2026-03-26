@@ -227,14 +227,13 @@ def fa_k_kernel(
     pv_buf: pl.Tensor[[48 * TS, D2], pl.FP32],
 ) -> pl.Tensor[[Sq2, D2], pl.FP16]:
     # =================== CUBE SECTION ===================
+    sq_dim = Sq2
+    skv_dim = Skv2
+    sq_tiles = (sq_dim + (TS - 1)) // TS
+    skv_tiles = (skv_dim + (TKV - 1)) // TKV
+    num_cores = pl.block.index_cast(pl.block.get_block_num())
+    core_id = pl.block.index_cast(pl.block.get_block_idx())
     with pl.section_cube():
-        sq_dim = Sq2
-        skv_dim = Skv2
-        sq_tiles = (sq_dim + (TS - 1)) // TS
-        skv_tiles = (skv_dim + (TKV - 1)) // TKV
-        num_cores = pl.block.index_cast(pl.block.get_block_num())
-        core_id = pl.block.index_cast(pl.block.get_block_idx())
-
         # MAT tiles — double buffer for K (ping/pong)
         q_mat_buf, k_mat_buf, p_mat_buf, v_mat_buf, left_buf, right_buf, acc_buf = alloc_cube_buffer()
         # Double buffer event IDs: ping=0, pong=1
@@ -263,22 +262,17 @@ def fa_k_kernel(
                 matmul2(ctx)
 
             ctx.q_count = ctx.q_count + 1
+        
         pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=0) # qk0
         pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=1) # qk1
-        pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=2) # qk1
-        pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=3) # v
+        pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=2) # v0
+        pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=3) # v1
         pl.system.sync_dst(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.MTE1, event_id=0)
         pl.system.sync_dst(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.MTE1, event_id=1)
         pl.system.sync_dst(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=0)
         pl.system.sync_dst(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=1)
     # =================== VECTOR SECTION ===================
     with pl.section_vector():
-        sq_dim = Sq2
-        skv_dim = Skv2
-        sq_tiles = (sq_dim + (TS - 1)) // TS
-        skv_tiles = (skv_dim + (TKV - 1)) // TKV
-        num_cores = pl.block.index_cast(pl.block.get_block_num())
-        core_id = pl.block.index_cast(pl.block.get_block_idx())
         sub_id = pl.block.index_cast(pl.block.get_subblock_idx())
         row_off = sub_id * TS_HALF
 
