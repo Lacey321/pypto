@@ -95,8 +95,8 @@ REGISTER_OP("manual.store")
       auto out_type = As<TensorType>(args[3]->GetType());
       CHECK(out_type) << "manual.store: arg 3 must be TensorType";
       CHECK(shapes->elements_.empty() ||
-            offsets->elements_.size() == shapes->elements_.size())
-          << "manual.store: offsets/shapes dimension mismatch";
+            offsets->elements_.size() >= shapes->elements_.size())
+          << "manual.store: offsets must have at least as many dimensions as shapes";
       return out_type;
     });
 
