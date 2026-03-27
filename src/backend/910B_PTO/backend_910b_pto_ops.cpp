@@ -415,7 +415,8 @@ static std::string MakeTensorPrintCodegenPTO(const CallPtr& op, codegen::Codegen
   return "";
 }
 
-// block.load: emit pto.subview + pto.tload (same format as original IR layer codegen)
+// block.load: emit pto.partition_view + pto.tload
+// For N-dim tensor (N > 2), flatten first N-1 dims into row offset
 static std::string MakeBlockLoadCodegenPTO(const CallPtr& op, codegen::CodegenBase& codegen_base) {
   auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
   auto tensor = As<Var>(op->args_[0]);
@@ -429,31 +430,101 @@ static std::string MakeBlockLoadCodegenPTO(const CallPtr& op, codegen::CodegenBa
   auto shapes_tuple = As<ir::MakeTuple>(op->args_[2]);
   INTERNAL_CHECK(shapes_tuple) << "block.load third argument must be a tuple (shapes)";
 
-  // Extract 2D offset and size values from tuples
-  auto row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
-  auto col_off = codegen.GetExprAsCode(offsets_tuple->elements_[1]);
-  int64_t height = codegen.GetConstIntValue(shapes_tuple->elements_[0]);
-  int64_t width = codegen.GetConstIntValue(shapes_tuple->elements_[1]);
-
   auto tensor_type = As<TensorType>(tensor->GetType());
   INTERNAL_CHECK(tensor_type) << "block.load tensor argument must have TensorType";
 
-  std::string tensor_view = codegen.GetOrCreateTensorView(tensor);
+  size_t tensor_ndim = tensor_type->shape_.size();
+  INTERNAL_CHECK(tensor_ndim >= 2) << "block.load: tensor must have at least 2 dimensions";
+
+  // shapes must be 2D (tile shape)
+  size_t shapes_ndim = shapes_tuple->elements_.size();
+  INTERNAL_CHECK(shapes_ndim == 2)
+      << "block.load: shapes tuple must have 2 elements (tile height and width)";
+
+  // height and width are the two dimensions
+  int64_t height = codegen.GetConstIntValue(shapes_tuple->elements_[0]);
+  int64_t width = codegen.GetConstIntValue(shapes_tuple->elements_[1]);
+
   std::string dtype_str = codegen.GetTypeString(tensor_type->dtype_);
   std::string tile_buf = codegen.GetCurrentResultTarget();
   INTERNAL_CHECK(!tile_buf.empty()) << "block.load requires assignment target (tile_buf)";
-
-  std::string tensor_view_type = codegen.GetTensorViewTypeString(tensor_type.get());
   std::string tile_buf_type = codegen.GetCurrentResultTileBufTypeString();
   std::string partition_type = "!pto.partition_tensor_view<" + std::to_string(height) + "x" +
                                std::to_string(width) + "x" + dtype_str + ">";
 
+  // Get all dimensions
+  std::vector<std::string> dims(tensor_ndim);
+  for (size_t i = 0; i < tensor_ndim; ++i) {
+    if (auto var_i = As<ir::Var>(tensor_type->shape_[i])) {
+      dims[i] = codegen.GetVarName(var_i);
+    } else {
+      dims[i] = codegen.GetIndexConstant(codegen.GetConstIntValue(tensor_type->shape_[i]));
+    }
+  }
+
+  // Compute row_off and col_off
+  std::string row_off, col_off;
+  if (tensor_ndim == 2) {
+    // 2D tensor: use offsets directly
+    row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
+    col_off = codegen.GetExprAsCode(offsets_tuple->elements_[1]);
+  } else {
+    // N-D tensor (N > 2): compute flattened row offset
+    // row_offset = offset[0]
+    // for i in 1..N-1: row_offset = row_offset * dim[i] + offset[i]
+    row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
+    for (size_t i = 1; i < tensor_ndim - 1; ++i) {
+      std::string dim_i = dims[i];
+      std::string off_i = codegen.GetExprAsCode(offsets_tuple->elements_[i]);
+      std::string new_row_off = codegen.NewTemp();
+      codegen.Emit(new_row_off + " = arith.muli " + row_off + ", " + dim_i + " : index");
+      std::string tmp = new_row_off;
+      new_row_off = codegen.NewTemp();
+      codegen.Emit(new_row_off + " = arith.addi " + tmp + ", " + off_i + " : index");
+      row_off = new_row_off;
+    }
+    col_off = codegen.GetExprAsCode(offsets_tuple->elements_[tensor_ndim - 1]);
+  }
+
+  // Create flattened 2D tensor_view for N-D tensor (N > 2)
+  std::string tensor_view;
+  std::string tensor_view_type;
+  if (tensor_ndim == 2) {
+    tensor_view = codegen.GetOrCreateTensorView(tensor);
+    tensor_view_type = codegen.GetTensorViewTypeString(tensor_type.get());
+  } else {
+    // Compute flattened row dimension: prod(dim[0..N-2])
+    // For 4D tensor [B, N, Sq, D], this is B * N * Sq
+    // row_off = ((b_idx * N + n_idx) * Sq + sq_off) is the linear index into [B*N*Sq]
+    std::string flat_row_dim = dims[0];
+    for (size_t i = 1; i < tensor_ndim - 1; ++i) {
+      std::string new_dim = codegen.NewTemp();
+      codegen.Emit(new_dim + " = arith.muli " + flat_row_dim + ", " + dims[i] + " : index");
+      flat_row_dim = new_dim;
+    }
+    
+    std::string col_dim = dims[tensor_ndim - 1];
+    std::string c1 = codegen.GetIndexConstant(1);
+    std::string raw_ptr = codegen.GetTensorPtr(tensor);
+    
+    // Create a 2D tensor_view with shape [flat_row_dim, col_dim]
+    tensor_view_type = "!pto.tensor_view<?x?x" + dtype_str + ">";
+    std::string nd_view = codegen.NewTemp();
+    std::ostringstream tv_line;
+    tv_line << nd_view << " = pto.make_tensor_view " << raw_ptr
+            << ", shape = [" << flat_row_dim << ", " << col_dim << "],"
+            << " strides = [" << col_dim << ", " << c1 << "]"
+            << " : " << tensor_view_type;
+    codegen.Emit(tv_line.str());
+    tensor_view = nd_view;
+  }
+
+  // Build partition_view with 2 offsets and 2 sizes
   std::string partition_view = codegen.NewTemp();
   std::ostringstream partition_line;
   partition_line << partition_view << " = pto.partition_view " << tensor_view;
   partition_line << ", offsets = [" << row_off << ", " << col_off << "]";
-  partition_line << ", sizes = [" << codegen.GetIndexConstant(height) << ", ";
-  partition_line << codegen.GetIndexConstant(width) << "]";
+  partition_line << ", sizes = [" << codegen.GetIndexConstant(height) << ", " << codegen.GetIndexConstant(width) << "]";
   partition_line << " : " << tensor_view_type << " -> " << partition_type;
   codegen.Emit(partition_line.str());
 
@@ -465,6 +536,7 @@ static std::string MakeBlockLoadCodegenPTO(const CallPtr& op, codegen::CodegenBa
 }
 
 // block.store: emit pto.partition_view + pto.tstore
+// For N-dim tensor (N > 2), flatten first N-1 dims into row offset
 static std::string MakeBlockStoreCodegenPTO(const CallPtr& op, codegen::CodegenBase& codegen_base) {
   auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
   auto tile = As<Var>(op->args_[0]);
@@ -478,22 +550,27 @@ static std::string MakeBlockStoreCodegenPTO(const CallPtr& op, codegen::CodegenB
   auto shapes_tuple = As<ir::MakeTuple>(op->args_[2]);
   INTERNAL_CHECK(shapes_tuple) << "block.store third argument must be a tuple (shapes)";
 
-  // Extract 2D offset and size values from tuples
-  auto row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
-  auto col_off = codegen.GetExprAsCode(offsets_tuple->elements_[1]);
-  int64_t height = codegen.GetConstIntValue(shapes_tuple->elements_[0]);
-  int64_t width = codegen.GetConstIntValue(shapes_tuple->elements_[1]);
   auto output_tensor = As<Var>(op->args_[3]);
   INTERNAL_CHECK(output_tensor) << "block.store output_tensor must be a Var";
 
   auto tensor_type = As<TensorType>(output_tensor->GetType());
   INTERNAL_CHECK(tensor_type) << "block.store output_tensor must have TensorType";
 
+  size_t tensor_ndim = tensor_type->shape_.size();
+  INTERNAL_CHECK(tensor_ndim >= 2) << "block.store: tensor must have at least 2 dimensions";
+
+  // shapes must be 2D (tile shape)
+  size_t shapes_ndim = shapes_tuple->elements_.size();
+  INTERNAL_CHECK(shapes_ndim == 2)
+      << "block.store: shapes tuple must have 2 elements (tile height and width)";
+
+  // height and width are the two dimensions
+  int64_t height = codegen.GetConstIntValue(shapes_tuple->elements_[0]);
+  int64_t width = codegen.GetConstIntValue(shapes_tuple->elements_[1]);
+
   std::string dtype_str = codegen.GetTypeString(tensor_type->dtype_);
-  std::string tensor_view = codegen.GetOrCreateTensorView(output_tensor);
   std::string tile_buf = codegen.GetVarName(tile);
 
-  std::string tensor_view_type = codegen.GetTensorViewTypeString(tensor_type.get());
   std::string partition_type = "!pto.partition_tensor_view<" + std::to_string(height) + "x" +
                                std::to_string(width) + "x" + dtype_str + ">";
 
@@ -501,12 +578,78 @@ static std::string MakeBlockStoreCodegenPTO(const CallPtr& op, codegen::CodegenB
   // dynamically-allocated buffers (e.g., reshape outputs in extra_tile_buf_types_)
   std::string tile_buf_type = codegen.GetExprTypeAnnotation(op->args_[0]);
 
+  // Get all dimensions
+  std::vector<std::string> dims(tensor_ndim);
+  for (size_t i = 0; i < tensor_ndim; ++i) {
+    if (auto var_i = As<ir::Var>(tensor_type->shape_[i])) {
+      dims[i] = codegen.GetVarName(var_i);
+    } else {
+      dims[i] = codegen.GetIndexConstant(codegen.GetConstIntValue(tensor_type->shape_[i]));
+    }
+  }
+
+  // Compute row_off and col_off
+  std::string row_off, col_off;
+  if (tensor_ndim == 2) {
+    // 2D tensor: use offsets directly
+    row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
+    col_off = codegen.GetExprAsCode(offsets_tuple->elements_[1]);
+  } else {
+    // N-D tensor (N > 2): compute flattened row offset
+    // row_offset = offset[0]
+    // for i in 1..N-1: row_offset = row_offset * dim[i] + offset[i]
+    row_off = codegen.GetExprAsCode(offsets_tuple->elements_[0]);
+    for (size_t i = 1; i < tensor_ndim - 1; ++i) {
+      std::string dim_i = dims[i];
+      std::string off_i = codegen.GetExprAsCode(offsets_tuple->elements_[i]);
+      std::string new_row_off = codegen.NewTemp();
+      codegen.Emit(new_row_off + " = arith.muli " + row_off + ", " + dim_i + " : index");
+      std::string tmp = new_row_off;
+      new_row_off = codegen.NewTemp();
+      codegen.Emit(new_row_off + " = arith.addi " + tmp + ", " + off_i + " : index");
+      row_off = new_row_off;
+    }
+    col_off = codegen.GetExprAsCode(offsets_tuple->elements_[tensor_ndim - 1]);
+  }
+
+  // Create flattened 2D tensor_view for N-D tensor (N > 2)
+  std::string tensor_view;
+  std::string tensor_view_type;
+  if (tensor_ndim == 2) {
+    tensor_view = codegen.GetOrCreateTensorView(output_tensor);
+    tensor_view_type = codegen.GetTensorViewTypeString(tensor_type.get());
+  } else {
+    // Compute flattened row dimension: prod(dim[0..N-2])
+    // For 4D tensor [B, N, Sq, D], this is B * N * Sq
+    std::string flat_row_dim = dims[0];
+    for (size_t i = 1; i < tensor_ndim - 1; ++i) {
+      std::string new_dim = codegen.NewTemp();
+      codegen.Emit(new_dim + " = arith.muli " + flat_row_dim + ", " + dims[i] + " : index");
+      flat_row_dim = new_dim;
+    }
+    
+    std::string col_dim = dims[tensor_ndim - 1];
+    std::string c1 = codegen.GetIndexConstant(1);
+    std::string raw_ptr = codegen.GetTensorPtr(output_tensor);
+    
+    // Create a 2D tensor_view with shape [flat_row_dim, col_dim]
+    tensor_view_type = "!pto.tensor_view<?x?x" + dtype_str + ">";
+    std::string nd_view = codegen.NewTemp();
+    std::ostringstream tv_line;
+    tv_line << nd_view << " = pto.make_tensor_view " << raw_ptr
+            << ", shape = [" << flat_row_dim << ", " << col_dim << "],"
+            << " strides = [" << col_dim << ", " << c1 << "]"
+            << " : " << tensor_view_type;
+    codegen.Emit(tv_line.str());
+    tensor_view = nd_view;
+  }
+
+  // Build partition_view with 2 offsets and 2 sizes
   std::string partition_view = codegen.NewTemp();
   std::ostringstream partition_line;
   partition_line << partition_view << " = pto.partition_view " << tensor_view;
   partition_line << ", offsets = [" << row_off << ", " << col_off << "]";
-  partition_line << ", sizes = [" << codegen.GetIndexConstant(height) << ", ";
-  partition_line << codegen.GetIndexConstant(width) << "]";
+  partition_line << ", sizes = [" << codegen.GetIndexConstant(height) << ", " << codegen.GetIndexConstant(width) << "]";
   partition_line << " : " << tensor_view_type << " -> " << partition_type;
   codegen.Emit(partition_line.str());
 

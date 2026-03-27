@@ -25,22 +25,28 @@ from ..utils import _get_span_or_capture, _normalize_expr, _to_make_tuple
 
 
 def _validate_offsets_shapes(offsets_tuple: _ir_core.MakeTuple, shapes_tuple: _ir_core.MakeTuple) -> None:
-    """Validate that offsets and shapes have matching, non-zero dimensions.
+    """Validate that offsets and shapes have compatible dimensions.
 
     Args:
         offsets_tuple: MakeTuple of offset expressions
         shapes_tuple: MakeTuple of shape expressions
 
     Raises:
-        ValueError: If dimensions don't match or are empty
+        ValueError: If dimensions are incompatible or empty
+
+    Note:
+        offsets can have more dimensions than shapes (for N-D tensors with 2-D tiles).
+        shapes must have exactly 2 elements (tile height and width).
     """
-    if len(offsets_tuple.elements) != len(shapes_tuple.elements):
+    num_offsets = len(offsets_tuple.elements)
+    num_shapes = len(shapes_tuple.elements)
+    if num_shapes != 2:
         raise ValueError(
-            f"offsets and shapes must have same number of dimensions, "
-            f"got {len(offsets_tuple.elements)} offsets and {len(shapes_tuple.elements)} shapes"
+            f"shapes must have exactly 2 elements (tile height and width), "
+            f"got {num_shapes} elements"
         )
-    if len(offsets_tuple.elements) == 0:
-        raise ValueError("offsets and shapes must have at least one dimension")
+    if num_offsets < 2:
+        raise ValueError("offsets must have at least 2 dimensions")
 
 
 # ============================================================================

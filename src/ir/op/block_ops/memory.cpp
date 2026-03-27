@@ -95,18 +95,21 @@ TypePtr DeduceBlockLoadType(const std::vector<ExprPtr>& args,
                             << " requires fourth argument to be a tuple (valid shapes), but got "
                             << args[3]->GetType()->TypeName();
 
-  // Verify offsets, shapes and valid_shapes have same number of dimensions
-  CHECK(offsets_tuple->elements_.size() == shapes_tuple->elements_.size())
+  // Verify shapes has exactly 2 elements (tile height and width)
+  // offsets can have more dimensions than shapes (for N-D tensors with 2-D tiles)
+  CHECK(shapes_tuple->elements_.size() == 2)
       << "The operator " << op_name
-      << " requires offsets and shapes to have same number of dimensions, but got "
-      << offsets_tuple->elements_.size() << " offsets and " << shapes_tuple->elements_.size() << " shapes";
+      << " requires shapes to have exactly 2 elements (tile height and width), but got "
+      << shapes_tuple->elements_.size() << " elements";
+  CHECK(offsets_tuple->elements_.size() >= 2)
+      << "The operator " << op_name
+      << " requires offsets to have at least 2 dimensions, but got "
+      << offsets_tuple->elements_.size() << " dimensions";
   CHECK(valid_shapes_tuple->elements_.size() == shapes_tuple->elements_.size())
       << "The operator " << op_name
       << " requires valid_shapes and shapes to have same number of dimensions, but got "
       << valid_shapes_tuple->elements_.size() << " valid_shapes and " << shapes_tuple->elements_.size()
       << " shapes";
-  CHECK(shapes_tuple->elements_.size() > 0)
-      << "The operator " << op_name << " requires at least one dimension, but got empty shapes tuple";
 
   // load to l1 need nz now
   auto target_memory = GetKwarg<MemorySpace>(kwargs, "target_memory");
@@ -158,11 +161,16 @@ TypePtr DeduceBlockStoreType(const std::vector<ExprPtr>& args,
                       << " requires third argument to be a tuple (shapes), but got "
                       << args[2]->GetType()->TypeName();
 
-  // Verify offsets and shapes have same number of dimensions.
-  CHECK(offsets_tuple->elements_.size() == shapes_tuple->elements_.size())
+  // Verify shapes has exactly 2 elements (tile height and width)
+  // offsets can have more dimensions than shapes (for N-D tensors with 2-D tiles)
+  CHECK(shapes_tuple->elements_.size() == 2)
       << "The operator " << op_name
-      << " requires offsets and shapes to have same number of dimensions, but got "
-      << offsets_tuple->elements_.size() << " offsets and " << shapes_tuple->elements_.size() << " shapes";
+      << " requires shapes to have exactly 2 elements (tile height and width), but got "
+      << shapes_tuple->elements_.size() << " elements";
+  CHECK(offsets_tuple->elements_.size() >= 2)
+      << "The operator " << op_name
+      << " requires offsets to have at least 2 dimensions, but got "
+      << offsets_tuple->elements_.size() << " dimensions";
 
   // Fourth argument must be the output tensor
   auto output_tensor_type = As<TensorType>(args[3]->GetType());

@@ -420,6 +420,40 @@ void PTOCodegen::EmitMakeTensorViews(const FunctionPtr& func) {
     if (auto tensor_type = As<TensorType>(param->GetType())) {
       std::string tensor_view = tensor_to_view_[param->name_];
 
+      // Pre-compute strides for multi-dimensional tensors (rank >= 3)
+      // For shape [d0, d1, ..., dn-1], strides = [d1*d2*...*dn-1, d2*...*dn-1, ..., dn-1, 1]
+      std::vector<std::string> stride_values;
+      if (!tensor_type->tensor_view_.has_value() || tensor_type->tensor_view_->stride.empty()) {
+        if (tensor_type->shape_.size() > 2) {
+          // Compute strides for each dimension
+          for (size_t j = 0; j < tensor_type->shape_.size(); j++) {
+            if (j == tensor_type->shape_.size() - 1) {
+              // Last dimension: stride = 1
+              stride_values.push_back(GetOrEmitIndexConstant(1));
+            } else {
+              // Compute product of remaining dimensions
+              std::string result;
+              for (size_t k = j + 1; k < tensor_type->shape_.size(); k++) {
+                std::string dim_val;
+                if (auto var = As<ir::Var>(tensor_type->shape_[k])) {
+                  dim_val = var_to_mlir_.at(var->name_);
+                } else {
+                  dim_val = GetOrEmitIndexConstant(GetConstIntValue(tensor_type->shape_[k]));
+                }
+                if (k == j + 1) {
+                  result = dim_val;
+                } else {
+                  std::string product = NewTemp();
+                  stream_ << GetIndent() << product << " = arith.muli " << result << ", " << dim_val << " : index\n";
+                  result = product;
+                }
+              }
+              stride_values.push_back(result);
+            }
+          }
+        }
+      }
+
       stream_ << GetIndent() << tensor_view << " = pto.make_tensor_view ";
       stream_ << "%arg" << i;
 
@@ -450,7 +484,13 @@ void PTOCodegen::EmitMakeTensorViews(const FunctionPtr& func) {
         }
       } else {
         // Default: row-major stride derived from shape
-        if (tensor_type->shape_.size() == 2) {
+        if (tensor_type->shape_.size() > 2) {
+          // Use pre-computed strides
+          for (size_t j = 0; j < stride_values.size(); j++) {
+            if (j > 0) stream_ << ", ";
+            stream_ << stride_values[j];
+          }
+        } else if (tensor_type->shape_.size() == 2) {
           if (auto var = As<ir::Var>(tensor_type->shape_[1])) {
             stream_ << var_to_mlir_.at(var->name_);
           } else {
