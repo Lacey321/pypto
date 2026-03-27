@@ -71,24 +71,19 @@ static std::string DataTypeToMLIRImpl(::pypto::DataType dtype) {
     return "f16";
   } else if (dtype == ::pypto::DataType::BF16) {
     return "bf16";
-  } else if (dtype == ::pypto::DataType::INT8) {
-    return "i8";
-  } else if (dtype == ::pypto::DataType::UINT8) {
-    return "ui8";
-  } else if (dtype == ::pypto::DataType::INT16) {
-    return "i16";
-  } else if (dtype == ::pypto::DataType::UINT16) {
-    return "ui16";
   } else if (dtype == ::pypto::DataType::INT32) {
     return "i32";
-  } else if (dtype == ::pypto::DataType::UINT32) {
-    return "ui32";
   } else if (dtype == ::pypto::DataType::INDEX) {
     return "index";
   } else if (dtype == ::pypto::DataType::INT64) {
     return "i64";
   } else if (dtype == ::pypto::DataType::UINT64) {
-    return "ui64";
+    // UINT64 is mapped to i64 for compatibility with arith.index_cast
+    return "i64";
+  } else if (dtype == ::pypto::DataType::INT8) {
+    return "i8";
+  } else if (dtype == ::pypto::DataType::UINT8) {
+    return "ui8";
   } else if (dtype == ::pypto::DataType::BOOL) {
     return "i1";
   } else {
@@ -428,6 +423,40 @@ void PTOCodegen::EmitMakeTensorViews(const FunctionPtr& func) {
     if (auto tensor_type = As<TensorType>(param->GetType())) {
       std::string tensor_view = tensor_to_view_[param->name_];
 
+      // Pre-compute strides for multi-dimensional tensors (rank >= 3)
+      // For shape [d0, d1, ..., dn-1], strides = [d1*d2*...*dn-1, d2*...*dn-1, ..., dn-1, 1]
+      std::vector<std::string> stride_values;
+      if (!tensor_type->tensor_view_.has_value() || tensor_type->tensor_view_->stride.empty()) {
+        if (tensor_type->shape_.size() > 2) {
+          // Compute strides for each dimension
+          for (size_t j = 0; j < tensor_type->shape_.size(); j++) {
+            if (j == tensor_type->shape_.size() - 1) {
+              // Last dimension: stride = 1
+              stride_values.push_back(GetOrEmitIndexConstant(1));
+            } else {
+              // Compute product of remaining dimensions
+              std::string result;
+              for (size_t k = j + 1; k < tensor_type->shape_.size(); k++) {
+                std::string dim_val;
+                if (auto var = As<ir::Var>(tensor_type->shape_[k])) {
+                  dim_val = var_to_mlir_.at(var->name_);
+                } else {
+                  dim_val = GetOrEmitIndexConstant(GetConstIntValue(tensor_type->shape_[k]));
+                }
+                if (k == j + 1) {
+                  result = dim_val;
+                } else {
+                  std::string product = NewTemp();
+                  stream_ << GetIndent() << product << " = arith.muli " << result << ", " << dim_val << " : index\n";
+                  result = product;
+                }
+              }
+              stride_values.push_back(result);
+            }
+          }
+        }
+      }
+
       stream_ << GetIndent() << tensor_view << " = pto.make_tensor_view ";
       stream_ << "%arg" << i;
 
@@ -458,7 +487,13 @@ void PTOCodegen::EmitMakeTensorViews(const FunctionPtr& func) {
         }
       } else {
         // Default: row-major stride derived from shape
-        if (tensor_type->shape_.size() == 2) {
+        if (tensor_type->shape_.size() > 2) {
+          // Use pre-computed strides
+          for (size_t j = 0; j < stride_values.size(); j++) {
+            if (j > 0) stream_ << ", ";
+            stream_ << stride_values[j];
+          }
+        } else if (tensor_type->shape_.size() == 2) {
           if (auto var = As<ir::Var>(tensor_type->shape_[1])) {
             stream_ << var_to_mlir_.at(var->name_);
           } else {
@@ -614,7 +649,7 @@ void PTOCodegen::VisitStmt_(const AssignStmtPtr& op) {
       VisitExpr(op->value_);
       // Built-in tile-producing ops often write directly to current_result_buf_
       // without producing a separate SSA value in current_expr_value_. Record the
-      // assigned buffer name so later uses like debug.dump_tile(tile) can resolve it.
+      // assigned buffer name so later uses like block.print(tile) can resolve it.
       if (result_tile_type && !current_result_buf_.empty()) {
         var_to_mlir_[op->var_->name_] = current_result_buf_;
       }

@@ -60,8 +60,8 @@ TypePtr DeduceBlockGetBlockIdxType(const std::vector<ExprPtr>& args,
                                    const std::string& op_name) {
   CHECK(args.size() == 0) << "The operator " << op_name << " requires no arguments, but got " << args.size();
 
-  // get_block_idx returns UINT64 scalar
-  return std::make_shared<ScalarType>(DataType::UINT64);
+  // get_block_idx returns INT64 scalar (for compatibility with arith.index_cast)
+  return std::make_shared<ScalarType>(DataType::INT64);
 }
 
 TypePtr DeduceBlockLoadType(const std::vector<ExprPtr>& args,
@@ -95,18 +95,21 @@ TypePtr DeduceBlockLoadType(const std::vector<ExprPtr>& args,
                             << " requires fourth argument to be a tuple (valid shapes), but got "
                             << args[3]->GetType()->TypeName();
 
-  // Verify offsets, shapes and valid_shapes have same number of dimensions
-  CHECK(offsets_tuple->elements_.size() == shapes_tuple->elements_.size())
+  // Verify shapes has exactly 2 elements (tile height and width)
+  // offsets can have more dimensions than shapes (for N-D tensors with 2-D tiles)
+  CHECK(shapes_tuple->elements_.size() == 2)
       << "The operator " << op_name
-      << " requires offsets and shapes to have same number of dimensions, but got "
-      << offsets_tuple->elements_.size() << " offsets and " << shapes_tuple->elements_.size() << " shapes";
+      << " requires shapes to have exactly 2 elements (tile height and width), but got "
+      << shapes_tuple->elements_.size() << " elements";
+  CHECK(offsets_tuple->elements_.size() >= 2)
+      << "The operator " << op_name
+      << " requires offsets to have at least 2 dimensions, but got "
+      << offsets_tuple->elements_.size() << " dimensions";
   CHECK(valid_shapes_tuple->elements_.size() == shapes_tuple->elements_.size())
       << "The operator " << op_name
       << " requires valid_shapes and shapes to have same number of dimensions, but got "
       << valid_shapes_tuple->elements_.size() << " valid_shapes and " << shapes_tuple->elements_.size()
       << " shapes";
-  CHECK(shapes_tuple->elements_.size() > 0)
-      << "The operator " << op_name << " requires at least one dimension, but got empty shapes tuple";
 
   // load to l1 need nz now
   auto target_memory = GetKwarg<MemorySpace>(kwargs, "target_memory");
@@ -158,11 +161,16 @@ TypePtr DeduceBlockStoreType(const std::vector<ExprPtr>& args,
                       << " requires third argument to be a tuple (shapes), but got "
                       << args[2]->GetType()->TypeName();
 
-  // Verify offsets and shapes have same number of dimensions.
-  CHECK(offsets_tuple->elements_.size() == shapes_tuple->elements_.size())
+  // Verify shapes has exactly 2 elements (tile height and width)
+  // offsets can have more dimensions than shapes (for N-D tensors with 2-D tiles)
+  CHECK(shapes_tuple->elements_.size() == 2)
       << "The operator " << op_name
-      << " requires offsets and shapes to have same number of dimensions, but got "
-      << offsets_tuple->elements_.size() << " offsets and " << shapes_tuple->elements_.size() << " shapes";
+      << " requires shapes to have exactly 2 elements (tile height and width), but got "
+      << shapes_tuple->elements_.size() << " elements";
+  CHECK(offsets_tuple->elements_.size() >= 2)
+      << "The operator " << op_name
+      << " requires offsets to have at least 2 dimensions, but got "
+      << offsets_tuple->elements_.size() << " dimensions";
 
   // Fourth argument must be the output tensor
   auto output_tensor_type = As<TensorType>(args[3]->GetType());
@@ -215,6 +223,62 @@ TypePtr DeduceBlockAllocType(const std::vector<ExprPtr>& args,
 
   // Return MemRefType
   return GetMemRefType();
+}
+
+TypePtr DeduceBlockPrintType(const std::vector<ExprPtr>& args,
+                             const std::vector<std::pair<std::string, std::any>>& kwargs,
+                             const std::string& op_name) {
+  CHECK(args.size() == 1 || args.size() == 3)
+      << "The operator " << op_name << " requires 1 argument (tile) or 3 arguments "
+      << "(tile, offsets, shapes), but got " << args.size();
+  auto tile_type = As<TileType>(args[0]->GetType());
+  CHECK(tile_type) << "The operator " << op_name << " requires first argument to be a TileType, but got "
+                   << args[0]->GetType()->TypeName();
+
+  if (args.size() == 3) {
+    auto offsets = As<MakeTuple>(args[1]);
+    CHECK(offsets) << "The operator " << op_name << " requires second argument to be a MakeTuple (offsets)";
+
+    auto shapes = As<MakeTuple>(args[2]);
+    CHECK(shapes) << "The operator " << op_name << " requires third argument to be a MakeTuple (shapes)";
+
+    const size_t rank = tile_type->shape_.size();
+    CHECK(rank == 2) << "The operator " << op_name << " currently only supports 2D tile windows, but got rank "
+                     << rank;
+    CHECK(offsets->elements_.size() == rank)
+        << "The operator " << op_name << " offsets count (" << offsets->elements_.size()
+        << ") must match tile rank (" << rank << ")";
+    CHECK(shapes->elements_.size() == rank)
+        << "The operator " << op_name << " shapes count (" << shapes->elements_.size()
+        << ") must match tile rank (" << rank << ")";
+
+    for (size_t i = 0; i < rank; ++i) {
+      auto offset_scalar = As<ScalarType>(offsets->elements_[i]->GetType());
+      CHECK(offset_scalar) << "The operator " << op_name << " offset element " << i
+                           << " must be ScalarType, but got "
+                           << offsets->elements_[i]->GetType()->TypeName();
+      CHECK(offset_scalar->dtype_.IsInt())
+          << "The operator " << op_name << " offset element " << i
+          << " must have integer dtype, but got " << offset_scalar->dtype_.ToString();
+      CHECK(As<ConstInt>(offsets->elements_[i]))
+          << "The operator " << op_name << " currently only supports static offsets; axis " << i
+          << " is dynamic";
+
+      auto shape_scalar = As<ScalarType>(shapes->elements_[i]->GetType());
+      CHECK(shape_scalar) << "The operator " << op_name << " shape element " << i
+                          << " must be ScalarType, but got "
+                          << shapes->elements_[i]->GetType()->TypeName();
+      CHECK(shape_scalar->dtype_.IsInt())
+          << "The operator " << op_name << " shape element " << i
+          << " must have integer dtype, but got " << shape_scalar->dtype_.ToString();
+      auto shape_const = As<ConstInt>(shapes->elements_[i]);
+      CHECK(shape_const) << "The operator " << op_name << " currently only supports static shapes; axis " << i
+                         << " is dynamic";
+      CHECK(shape_const->value_ > 0) << "The operator " << op_name << " shape element " << i
+                                     << " must be positive, got " << shape_const->value_;
+    }
+  }
+  return GetUnknownType();
 }
 
 TypePtr DeduceBlockCreateTileType(const std::vector<ExprPtr>& args,
@@ -491,82 +555,15 @@ REGISTER_OP("block.full")
       return DeduceBlockFullType(args, kwargs, "block.full");
     });
 
-TypePtr DeduceBlockGetValType(const std::vector<ExprPtr>& args,
-                                   const std::vector<std::pair<std::string, std::any>>& kwargs) {
-  // block.getval: Read a scalar value from a tile at flattened index
-  // Args: (tile, index)
-  // Returns: ScalarType with tile's element dtype
-  CHECK(args.size() == 2) << "block.getval requires exactly 2 arguments (tile, index), but got "
-                          << args.size();
-
-  // First argument must be TileType
-  auto tile_type = As<TileType>(args[0]->GetType());
-  CHECK(tile_type) << "block.getval requires first argument to be a TileType, but got "
-                     << args[0]->GetType()->TypeName();
-
-  // Second argument must be ScalarType with integer dtype (flattened index)
-  auto index_type = As<ScalarType>(args[1]->GetType());
-  CHECK(index_type) << "block.getval requires index to be ScalarType, but got "
-                     << args[1]->GetType()->TypeName();
-  CHECK(index_type->dtype_.IsInt())
-      << "block.getval index must have integer dtype, but got "
-      << index_type->dtype_.ToString();
-
-  // Return ScalarType with tile's element dtype
-  return std::make_shared<ScalarType>(tile_type->dtype_);
-}
-
-REGISTER_OP("block.getval")
+REGISTER_OP("block.print")
     .set_op_category("BlockOp")
-    .set_description("Read a scalar value from a tile at flattened index")
+    .set_description("Print a tile or tile window for debugging")
     .add_argument("tile", "Input tile (TileType)")
-    .add_argument("index", "Flattened element index in tile layout (ScalarType with integer dtype)")
+    .add_argument("offsets", "Optional static offsets per dimension (MakeTuple of ConstInt)")
+    .add_argument("shapes", "Optional static shape per dimension (MakeTuple of ConstInt)")
     .f_deduce_type([](const std::vector<ExprPtr>& args,
-                       const std::vector<std::pair<std::string, std::any>>& kwargs) {
-      return DeduceBlockGetValType(args, kwargs);
+                      const std::vector<std::pair<std::string, std::any>>& kwargs) {
+      return DeduceBlockPrintType(args, kwargs, "block.print");
     });
-
-TypePtr DeduceBlockSetValType(const std::vector<ExprPtr>& args,
-                                   const std::vector<std::pair<std::string, std::any>>& kwargs) {
-  // block.setval: Write a scalar value to a tile at flattened index
-  // Args: (tile, index, value)
-  // Returns: TileType (same as input tile)
-  CHECK(args.size() == 3) << "block.setval requires exactly 3 arguments (tile, index, value), but got "
-                          << args.size();
-
-  // First argument must be TileType
-  auto tile_type = As<TileType>(args[0]->GetType());
-  CHECK(tile_type) << "block.setval requires first argument to be a TileType, but got "
-                     << args[0]->GetType()->TypeName();
-
-  // Second argument must be ScalarType with integer dtype (flattened index)
-  auto index_type = As<ScalarType>(args[1]->GetType());
-  CHECK(index_type) << "block.setval requires index to be ScalarType, but got "
-                     << args[1]->GetType()->TypeName();
-  CHECK(index_type->dtype_.IsInt())
-      << "block.setval index must have integer dtype, but got "
-      << index_type->dtype_.ToString();
-
-  // Third argument must be ScalarType (value to write)
-  auto value_type = As<ScalarType>(args[2]->GetType());
-  CHECK(value_type) << "block.setval requires value to be ScalarType, but got "
-                     << args[2]->GetType()->TypeName();
-
-  // Value type should match tile (or be compatible for implicit conversion)
-  // For now, we just return the tile type with same shape, dtype, and memref
-  return std::make_shared<TileType>(tile_type->shape_, tile_type->dtype_, tile_type->memref_);
-}
-
-REGISTER_OP("block.setval")
-    .set_op_category("BlockOp")
-    .set_description("Write a scalar value to a tile at flattened index")
-    .add_argument("tile", "Input tile (TileType)")
-    .add_argument("index", "Flattened element index in tile layout (ScalarType with integer dtype)")
-    .add_argument("value", "Scalar value to write (ScalarType)")
-    .f_deduce_type([](const std::vector<ExprPtr>& args,
-                       const std::vector<std::pair<std::string, std::any>>& kwargs) {
-      return DeduceBlockSetValType(args, kwargs);
-    });
-
 }  // namespace ir
 }  // namespace pypto

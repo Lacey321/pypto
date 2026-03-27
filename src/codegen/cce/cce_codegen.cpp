@@ -1919,7 +1919,7 @@ class TensorAccessShapeCollector : public ir::IRVisitor {
     // Determine tensor arg index and tile arg index:
     // block.load: tensor at arg[0], shapes at arg[2], tile at arg[3]
     // block.store / block.l0c_store: tensor at arg[3], shapes at arg[2], tile at arg[0]
-    // manual.load: tensor at arg[0], tile at arg[2] (no shapes arg)
+    // manual.load: tensor at arg[0], shapes at arg[2], tile at arg[3]
     // manual.store / manual.l0c_store: tensor at arg[2], tile at arg[0] (no shapes arg)
     int tensor_arg_idx = -1;
     int shapes_arg_idx = -1;
@@ -1927,7 +1927,7 @@ class TensorAccessShapeCollector : public ir::IRVisitor {
     if (op_name == "block.load") {
       tensor_arg_idx = 0; shapes_arg_idx = 2; tile_arg_idx = 3;
     } else if (op_name == "manual.load") {
-      tensor_arg_idx = 0; tile_arg_idx = 2;
+      tensor_arg_idx = 0; shapes_arg_idx = 2; tile_arg_idx = 3;
     } else if (op_name == "block.store" || op_name == "block.l0c_store") {
       tensor_arg_idx = 3; shapes_arg_idx = 2; tile_arg_idx = 0;
     } else if (op_name == "manual.store" || op_name == "manual.l0c_store") {
