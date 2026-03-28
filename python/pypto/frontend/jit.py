@@ -22,7 +22,7 @@ import torch
 
 from pypto import DataType, backend
 from pypto.backend import BackendType
-from pypto.pypto_core.codegen import PTOCodegen
+from pypto.pypto_core.codegen import CCECodegen, PTOCodegen
 from pypto.pypto_core.ir import ConstInt, PtrType, ScalarType, TensorType, Var
 
 _jit_functions = {}
@@ -527,7 +527,8 @@ def _build_bisheng_flags(toolkit_home: str, arch: str, cpp_content: str, has_cro
     return [*flags, *common]
 
 
-def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_debug: bool | None = None):
+def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_debug: bool | None = None,
+            codegen_mode: str = "pto"):
     """Compile a PTO program to a shared library.
 
     Args:
@@ -541,6 +542,9 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
             - None: auto-enable when PTO MLIR contains `pto.tprint` or `pto.print`
             - True: force enable device-side debug printing flags
             - False: force disable device-side debug printing flags
+        codegen_mode: Code generation mode.
+            - "pto": Default. Generate MLIR → ptoas → C++ (original flow).
+            - "cce": Skip ptoas. Generate C++ directly via CCECodegen.
     """
     # Deferred compilation: parse KernelDef → ir.Program with arch info
     from pypto.frontend.kernel import KernelDef
@@ -548,10 +552,7 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
         prog = prog.parse(npu_arch=arch)
 
     arch = _normalize_arch(arch)
-    backend.reset_for_testing()
-    backend.set_backend_type(BackendType.PTO)
     Path("./build").mkdir(parents=True, exist_ok=True)
-    ir_path = "./build/kernel.pto"  # TODO: use Python `tempfile` module
     raw_cpp_path = "./build/kernel.cpp"
     final_kernel = "./build/call_kernel.cpp"
     lib_path = "./build/call_kernel.so"
@@ -561,58 +562,104 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
     else:
         os.environ["npu_arch"] = "dav-c310"
 
-    # step 1, Program -> PtoAs-mlir
-    codegen = PTOCodegen()
-    mlir_code = _get_mlir_code(codegen.generate(prog))
+    if codegen_mode == "cce":
+        # CCE direct path: pypto IR → C++ (skip ptoas)
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.CCE)
 
-    # Auto-detect cross-core sync from IR
-    has_cross_sync = "pto.sync.set" in mlir_code
-    needs_print_debug = ("pto.tprint" in mlir_code) or ("pto.print" in mlir_code)
-    if has_cross_sync:
-        mlir_code = _inject_set_ffts_to_mlir(mlir_code)
-    with open(ir_path, "w") as f:
-        f.write(mlir_code)
+        cce_codegen = CCECodegen()
+        cpp_code = cce_codegen.generate_single(prog)
+        Path(raw_cpp_path).write_text(cpp_code, encoding="utf-8")
 
-    # step 2, IR -> CPP
-    # TODO: use `ptoas --enable-insert-sync` so no need for explicit sync in frontend
-    # need https://github.com/zhangstevenunity/PTOAS/issues/10
-    # Note: --pto-level=level3 is required for addr operand support
-    result = subprocess.run(
-        ["ptoas", ir_path, "--enable-insert-sync", "--pto-level=level3", f"--pto-arch={arch}", "-o", raw_cpp_path],
-        check=False, timeout=timeout, capture_output=True
-    )
-    if result.returncode != 0:
-        print(f"ptoas failed with return code {result.returncode}")
-        print(f"stderr: {result.stderr.decode()}")
-        return None
+        # Parse kernel signature from generated C++
+        content = cpp_code
+        kernel_name = None
+        kernel_params = []
+        for line in content.splitlines():
+            if "__global__" in line and "AICORE" in line:
+                combined = line
+                # Try multi-line
+                idx = content.splitlines().index(line)
+                all_lines = content.splitlines()
+                combined = "".join(all_lines[idx:idx + 3]).strip()
+                parsed = parse_kernel_signature(combined, "")
+                if parsed:
+                    kernel_name, kernel_params = parsed
+                    break
+        if kernel_name is None:
+            raise RuntimeError("Could not find kernel name in CCE-generated C++ code")
 
-    # Step 3, preprocess cpp source
-    # TODO: should extend `ptoas` emitc to largely replace this ad-doc editing
-    content = Path(raw_cpp_path).read_text(encoding="utf-8")
-    kernel_name = None
-    kernel_params = []
-    for line in content.splitlines():
-        if "__global__" in line and "AICORE" in line:
-            parsed = parse_kernel_signature(line, "")
-            if parsed:
-                kernel_name, kernel_params = parsed
-                break
-    if kernel_name is None:
-        raise RuntimeError("Could not find kernel name in generated C++ code")
-    resolved_enable_print_debug = needs_print_debug if enable_print_debug is None else enable_print_debug
+        # Detect cross-core sync from generated code
+        has_cross_sync = "set_ffts_base_addr" in content
+        if has_cross_sync:
+            # Remove the ffts_addr param from kernel_params (last param)
+            kernel_params = kernel_params[:-1]
 
-    if has_cross_sync:
-        kernel_params = kernel_params[:-1]
-    caller_content = _generate_caller_cpp(
-        kernel_params=kernel_params,
-        kernel_cpp_name="kernel.cpp",
-        kernel_name=kernel_name,
-        has_cross_core_sync=has_cross_sync,
-        enable_print_debug=resolved_enable_print_debug,
-    )
-    Path(final_kernel).write_text(caller_content, encoding="utf-8")
+        needs_print_debug = False
+        caller_content = _generate_caller_cpp(
+            kernel_params=kernel_params,
+            kernel_cpp_name="kernel.cpp",
+            kernel_name=kernel_name,
+            has_cross_core_sync=has_cross_sync,
+        )
+        Path(final_kernel).write_text(caller_content, encoding="utf-8")
+    else:
+        # PTO path: pypto IR → MLIR → ptoas → C++ (original flow)
+        backend.reset_for_testing()
+        backend.set_backend_type(BackendType.PTO)
 
-    # Step 4, cpp -> so
+        ir_path = "./build/kernel.pto"
+
+        # step 1, Program -> PtoAs-mlir
+        pto_codegen = PTOCodegen()
+        mlir_code = _get_mlir_code(pto_codegen.generate(prog))
+
+        # Auto-detect cross-core sync from IR
+        has_cross_sync = "pto.sync.set" in mlir_code
+        needs_print_debug = ("pto.tprint" in mlir_code) or ("pto.print" in mlir_code)
+        if has_cross_sync:
+            mlir_code = _inject_set_ffts_to_mlir(mlir_code)
+        with open(ir_path, "w") as f:
+            f.write(mlir_code)
+
+        # step 2, IR -> CPP
+        result = subprocess.run(
+            ["ptoas", ir_path, "--enable-insert-sync", "--pto-level=level3", f"--pto-arch={arch}", "-o", raw_cpp_path],
+            check=False, timeout=timeout, capture_output=True
+        )
+        if result.returncode != 0:
+            print(f"ptoas failed with return code {result.returncode}")
+            print(f"stderr: {result.stderr.decode()}")
+            return None
+
+        # Step 3, preprocess cpp source
+        content = Path(raw_cpp_path).read_text(encoding="utf-8")
+        kernel_name = None
+        kernel_params = []
+        for line in content.splitlines():
+            if "__global__" in line and "AICORE" in line:
+                parsed = parse_kernel_signature(line, "")
+                if parsed:
+                    kernel_name, kernel_params = parsed
+                    break
+        if kernel_name is None:
+            raise RuntimeError("Could not find kernel name in generated C++ code")
+        resolved_enable_print_debug = needs_print_debug if enable_print_debug is None else enable_print_debug
+        if has_cross_sync:
+            kernel_params = kernel_params[:-1]
+        caller_content = _generate_caller_cpp(
+            kernel_params=kernel_params,
+            kernel_cpp_name="kernel.cpp",
+            kernel_name=kernel_name,
+            has_cross_core_sync=has_cross_sync,
+            enable_print_debug=resolved_enable_print_debug
+        )
+        Path(final_kernel).write_text(caller_content, encoding="utf-8")
+
+        if clean_up:
+            os.remove(ir_path)
+
+    # Step 4, cpp -> so (shared between both modes)
     PTO_LIB_PATH = os.environ["ASCEND_TOOLKIT_HOME"]
     ASCEND_HOME_PATH = os.environ.get("ASCEND_HOME_PATH")
     if not ASCEND_HOME_PATH:
@@ -626,7 +673,8 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
         f"-I{ASCEND_HOME_PATH}/include/experiment/runtime",
         f"-I{ASCEND_HOME_PATH}/include/experiment/msprof",
     ]
-    
+
+    resolved_enable_print_debug = needs_print_debug if enable_print_debug is None else enable_print_debug
     flags = _build_bisheng_flags(
         PTO_LIB_PATH,
         arch,
@@ -646,7 +694,6 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
         return None
 
     if clean_up:
-        os.remove(ir_path)
         os.remove(raw_cpp_path)
         os.remove(final_kernel)
 

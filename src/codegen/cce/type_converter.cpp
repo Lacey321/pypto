@@ -31,9 +31,29 @@ std::string TypeConverter::ConvertTileType(const ir::TileTypePtr& tile_type, int
                                            int64_t cols) const {
   std::ostringstream type_alias;
   if (!tile_type->memref_.has_value()) {
-    type_alias << "Tile<TileType::Vec, " << tile_type->dtype_.ToCTypeString() << ", " << rows << ", " << cols
-               << ", BLayout::RowMajor, -1, -1>;";
-    LOG_ERROR << "TileType has no memref, using default TileType::Vec";
+    // No memref: IfStmt return variable or intermediate tile.
+    // Still generate proper Tile type using tile_view if available.
+    std::string tile_type_str = "TileType::Vec";
+    std::string BLayout = "RowMajor";
+    std::string SLayout = "NoneBox";
+    std::string fractal = "512";
+    if (cols == 1) {
+      BLayout = "ColMajor";
+    }
+    if (tile_type->tile_view_.has_value()) {
+      const auto& tv = tile_type->tile_view_.value();
+      BLayout = ConvertTileLayout(tv.blayout);
+      SLayout = ConvertTileLayout(tv.slayout);
+      fractal = std::to_string(tv.fractal);
+      // Infer TileType from tile_view layout
+      using TL = ir::TileLayout;
+      if (tv.blayout == TL::col_major && tv.slayout == TL::row_major) tile_type_str = "TileType::Mat";
+      else if (tv.blayout == TL::row_major && tv.slayout == TL::row_major) tile_type_str = "TileType::Left";
+      else if (tv.blayout == TL::row_major && tv.slayout == TL::col_major) tile_type_str = "TileType::Right";
+    }
+    type_alias << "Tile<" << tile_type_str << ", " << tile_type->dtype_.ToCTypeString() << ", " << rows
+               << ", " << cols << ", BLayout::" << BLayout << ", -1, -1, SLayout::" << SLayout << ", "
+               << fractal << ">";
     return type_alias.str();
   }
   ir::MemorySpace space = (*tile_type->memref_)->memory_space_;  // NOLINT(bugprone-unchecked-optional-access)
@@ -53,7 +73,7 @@ std::string TypeConverter::ConvertTileType(const ir::TileTypePtr& tile_type, int
     fractal = std::to_string(tv.fractal);
   }
   type_alias << "Tile<" << tile_type_str << ", " << tile_type->dtype_.ToCTypeString() << ", " << rows << ", "
-             << cols << ", BLayout::" << BLayout << ", -1, -1, " << "SLayout::" << SLayout << ", " << fractal
+             << cols << ", BLayout::" << BLayout << ", -1, -1, SLayout::" << SLayout << ", " << fractal
              << ">";
 
   return type_alias.str();

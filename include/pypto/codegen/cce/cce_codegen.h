@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,6 +64,21 @@ class CCECodegen : public CodegenBase {
    */
   [[nodiscard]] std::map<std::string, std::string> Generate(const ir::ProgramPtr& program);
 
+  /**
+   * @brief Generate a single C++ file from a PyPTO IR Program (MIX mode)
+   *
+   * Runs IR passes (LowerBreakContinue → ConvertToSSA → ConstFoldAndSimplify),
+   * then generates a single __global__ AICORE kernel with:
+   * - PTO-style function signature
+   * - Section-aware tile declarations (#if __DAV_CUBE__ / __DAV_VEC__)
+   * - constexpr for compile-time constants
+   * - FFTS support for cross-core sync
+   *
+   * @param program The IR Program to generate code for
+   * @return Generated C++ code as a single string
+   */
+  [[nodiscard]] std::string GenerateSingle(const ir::ProgramPtr& program);
+
   // CodegenBase interface (unified API for operator codegen callbacks)
   [[nodiscard]] std::string GetCurrentResultTarget() const override { return current_target_var_; }
   void Emit(const std::string& line) override;
@@ -72,6 +88,18 @@ class CCECodegen : public CodegenBase {
   std::string GetVarName(const ir::VarPtr& var) override;
 
   const TypeConverter& GetTypeConverter() const { return type_converter_; }
+
+  /** @brief Check if currently generating in single-file MIX mode */
+  bool IsSingleFileMode() const { return single_file_mode_; }
+
+  /**
+   * @brief Compute offset from IR tensor shape (for single-file mode without Tensor struct)
+   *
+   * Computes row-major stride-based offset: off[0]*stride[0] + off[1]*stride[1] + ...
+   * where stride[i] = product(shape[i+1..n-1])
+   */
+  std::string ComputeIRBasedOffset(const ir::TensorTypePtr& tensor_type,
+                                   const ir::MakeTuplePtr& offsets);
 
   /**
    * @brief Get pointer name for a variable (CCE-specific)
@@ -114,6 +142,7 @@ class CCECodegen : public CodegenBase {
   void VisitStmt_(const ir::WhileStmtPtr& op) override;
   void VisitStmt_(const ir::IfStmtPtr& op) override;
   void VisitStmt_(const ir::YieldStmtPtr& op) override;
+  void VisitStmt_(const ir::SectionStmtPtr& op) override;
 
   // Override visitor methods for code generation - Expressions
   // Leaf nodes
@@ -282,6 +311,24 @@ class CCECodegen : public CodegenBase {
       const std::optional<std::string>& tensor_struct_ptr = std::nullopt,
       const std::optional<std::vector<ir::ExprPtr>>& access_shape = std::nullopt);
 
+  /**
+   * @brief Generate PTO-style function signature and prologue for single-file mode
+   *
+   * Emits __global__ AICORE void func_name(__gm__ type* p, ...) with constexpr
+   * scalars and section-aware tile declarations.
+   */
+  void GenerateSinglePrologue(const ir::FunctionPtr& func, bool has_cross_sync);
+
+  /**
+   * @brief Detect whether the program uses cross-core sync ops
+   */
+  bool DetectCrossCoreSyncOps(const ir::StmtPtr& stmt);
+
+  /**
+   * @brief Collect which section each tile belongs to (for section-aware declaration)
+   */
+  std::map<ir::VarPtr, ir::SectionKind> CollectTileSections(const ir::StmtPtr& stmt);
+
   // Dual-mode context for expression visitor pattern
   std::string current_target_var_;         ///< INPUT: Assignment target variable name (for Call expressions)
   std::string current_expr_value_;         ///< OUTPUT: Inline C++ value for scalar expressions
@@ -291,6 +338,10 @@ class CCECodegen : public CodegenBase {
   CodeContext context_;              ///< Context for variable tracking
   TypeConverter type_converter_;     ///< Type converter
   const backend::Backend* backend_;  ///< CCE backend instance (for op info, core type, orchestration)
+  bool single_file_mode_ = false;    ///< Whether generating in single-file MIX mode
+  bool force_dn_layout_ = false;     ///< Temporary flag for DN layout in GenerateGlobalTensorTypeDeclaration
+  std::set<ir::VarPtr> dn_tensors_;  ///< Tensors loaded with layout="dn" (need Layout::DN)
+  std::map<std::string, std::string> tile_addresses_;  ///< tile_name → TASSIGN address expression
 };
 
 }  // namespace codegen

@@ -168,6 +168,7 @@ set(PYPTO_SOURCES
     # Backend
     src/backend/910B_CCE/backend_910b_cce.cpp
     src/backend/910B_CCE/backend_910b_cce_ops.cpp
+    src/backend/910B_CCE/backend_910b_cce_manual_ops.cpp
     src/backend/910B_PTO/backend_910b_pto.cpp
     src/backend/910B_PTO/backend_910b_pto_ops.cpp
     src/backend/910B_PTO/backend_910b_pto_manual_ops.cpp

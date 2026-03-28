@@ -37,17 +37,18 @@ TS = 128;  TKV = 128;  TD = 128
 TS_HALF = TS // 2
 SCALE = 1.0 / math.sqrt(TD)
 
-Q_F16  = TS * TD * 2;   KT_F16 = TD * TKV * 2;  V_F16  = TKV * TD * 2
-P_F16  = TS * TKV * 2;  QK_F32 = TS * TKV * 4;  PV_F32 = TS * TD * 4
+# Cube tiles use TS_HALF rows (both Cube and Vector process row halves)
+Q_HALF_F16 = TS_HALF * TD * 2;  KT_F16 = TD * TKV * 2;  V_F16 = TKV * TD * 2
+P_HALF_F16 = TS_HALF * TKV * 2; QK_HALF_F32 = TS_HALF * TKV * 4; PV_HALF_F32 = TS_HALF * TD * 4
 
 # ---- MAT (512KB) ----
-MA0 = 0;                MA0_PONG = MA0 + Q_F16
-MA1 = Q_F16 * 2;        MA1_PONG = MA1 + KT_F16
-MA2 = MA1 + KT_F16 * 2; MA2_PONG = MA2 + P_F16
-MA3 = MA2 + P_F16 * 2;  MA3_PONG = MA3 + V_F16
-LA0 = 0;  LA1 = Q_F16
+MA0 = 0;                  MA0_PONG = MA0 + Q_HALF_F16
+MA1 = Q_HALF_F16 * 2;    MA1_PONG = MA1 + KT_F16
+MA2 = MA1 + KT_F16 * 2;  MA2_PONG = MA2 + P_HALF_F16
+MA3 = MA2 + P_HALF_F16 * 2; MA3_PONG = MA3 + V_F16
+LA0 = 0;  LA1 = Q_HALF_F16
 RA0 = 0;  RA1 = KT_F16
-CA0 = 0;  CA1 = QK_F32
+CA0 = 0;  CA1 = QK_HALF_F32
 
 # ---- VEC addresses (192KB) ----
 VB4_KV = TS_HALF * TKV * 4;  VB2_KV = TS_HALF * TKV * 2
@@ -96,28 +97,29 @@ D2       = pl.DynVar('D')
 
 # ================================================================
 def alloc_cube_buffer():
-    q_mat_type = plm.TileType(shape=[TS, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat)
-    q_mat_0 = plm.make_tile(q_mat_type, addr=MA0, size=Q_F16)
-    q_mat_1 = plm.make_tile(q_mat_type, addr=MA0_PONG, size=Q_F16)
+    # Cube uses TS_HALF rows for Q, P, ACC (row halves processed sequentially)
+    q_mat_type = plm.TileType(shape=[TS_HALF, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat)
+    q_mat_0 = plm.make_tile(q_mat_type, addr=MA0, size=Q_HALF_F16)
+    q_mat_1 = plm.make_tile(q_mat_type, addr=MA0_PONG, size=Q_HALF_F16)
 
     k_mat_type = plm.TileType(shape=[TD, TKV], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat, blayout=1, slayout=2)
     k_mat_0 = plm.make_tile(k_mat_type, addr=MA1, size=KT_F16)
     k_mat_1 = plm.make_tile(k_mat_type, addr=MA1_PONG, size=KT_F16)
 
-    p_mat_type = plm.TileType(shape=[TS, TKV], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat)
-    p_mat_0 = plm.make_tile(p_mat_type, addr=MA2, size=P_F16)
-    p_mat_1 = plm.make_tile(p_mat_type, addr=MA2_PONG, size=P_F16)
+    p_mat_type = plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat)
+    p_mat_0 = plm.make_tile(p_mat_type, addr=MA2, size=P_HALF_F16)
+    p_mat_1 = plm.make_tile(p_mat_type, addr=MA2_PONG, size=P_HALF_F16)
 
     v_mat_type = plm.TileType(shape=[TKV, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Mat)
     v_mat_0 = plm.make_tile(v_mat_type, addr=MA3, size=V_F16)
     v_mat_1 = plm.make_tile(v_mat_type, addr=MA3_PONG, size=V_F16)
 
-    left_0 = plm.make_tile(plm.TileType(shape=[TS, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Left), addr=LA0, size=Q_F16)
-    left_1 = plm.make_tile(plm.TileType(shape=[TS, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Left), addr=LA1, size=Q_F16)
+    left_0 = plm.make_tile(plm.TileType(shape=[TS_HALF, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Left), addr=LA0, size=Q_HALF_F16)
+    left_1 = plm.make_tile(plm.TileType(shape=[TS_HALF, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Left), addr=LA1, size=Q_HALF_F16)
     right_0 = plm.make_tile(plm.TileType(shape=[TKV, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Right), addr=RA0, size=KT_F16)
     right_1 = plm.make_tile(plm.TileType(shape=[TKV, TD], dtype=pl.FP16, target_memory=pl.MemorySpace.Right), addr=RA1, size=KT_F16)
-    acc_0 = plm.make_tile(plm.TileType(shape=[TS, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc), addr=CA0, size=QK_F32)
-    acc_1 = plm.make_tile(plm.TileType(shape=[TS, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc), addr=CA1, size=PV_F32)
+    acc_0 = plm.make_tile(plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc), addr=CA0, size=QK_HALF_F32)
+    acc_1 = plm.make_tile(plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Acc), addr=CA1, size=PV_HALF_F32)
 
     return ((q_mat_0, q_mat_1), (k_mat_0, k_mat_1), (p_mat_0, p_mat_1),
             (v_mat_0, v_mat_1), (left_0, left_1), (right_0, right_1), (acc_0, acc_1))
@@ -159,7 +161,7 @@ def compute_qk(ctx):
 
     pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=event_ids_01[ctx.buf_idx])
     if ctx.task_id == 0:
-        plm.load(q_mat_buf[q_mat_idx], q, [ctx.sq_off, 0])
+        plm.load(q_mat_buf[q_mat_idx], q, [ctx.sq_off + ctx.row_off, 0])
     plm.load(k_mat_buf[ctx.buf_idx], k, [skv_off, 0], layout="dn")
     pl.system.sync_src(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.MTE1, event_id=0)
     pl.system.sync_dst(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.MTE1, event_id=0)
@@ -176,7 +178,7 @@ def compute_qk(ctx):
     pl.system.sync_src(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.FIX, event_id=0)
     pl.system.sync_dst(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.FIX, event_id=0)
     pl.system.sync_src(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.MTE1, event_id=event_ids_01[ctx.l0ab_idx])
-    plm.l0c_store(acc_buf[ctx.l0c_idx], [qk_fifo_slot * sq_dim + ctx.sq_off, skv_off], [TS, TKV], qk_buf)
+    plm.l0c_store(acc_buf[ctx.l0c_idx], [qk_fifo_slot * sq_dim + ctx.sq_off + ctx.row_off, skv_off], [TS_HALF, TKV], qk_buf)
     pl.system.sync_src(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=event_ids_01[ctx.l0c_idx])
     ctx.l0ab_idx = 1 - ctx.l0ab_idx
     ctx.l0c_idx = 1 - ctx.l0c_idx
@@ -194,7 +196,7 @@ def compute_pv(ctx):
     pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=event_ids_23[ctx.buf_idx])
     plm.load(v_mat_buf[ctx.buf_idx], v, [sv_off, 0])
     pl.system.wait_cross_core(pipe=pl.PipeType.M, event_id=P_READY_IDS[pv_fifo_slot], max_event_id=P_MAX_EID)
-    plm.load(p_mat_buf[ctx.buf_idx], p_buf, [pv_fifo_slot * sq_dim + ctx.sq_off, sv_off])
+    plm.load(p_mat_buf[ctx.buf_idx], p_buf, [pv_fifo_slot * sq_dim + ctx.sq_off + ctx.row_off, sv_off])
     pl.system.sync_src(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.MTE1, event_id=0)
     pl.system.sync_dst(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.MTE1, event_id=0)
 
@@ -211,8 +213,8 @@ def compute_pv(ctx):
     pl.system.sync_dst(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.FIX, event_id=0)
     pl.system.sync_src(set_pipe=pl.PipeType.M, wait_pipe=pl.PipeType.MTE1, event_id=event_ids_01[ctx.l0ab_idx])
     plm.l0c_store(acc_buf[ctx.l0c_idx],
-                  [ctx.core_id * PV_CORE_STRIDE + q_mat_idx * FIFO_SIZE * TS + pv_task_slot * TS, 0],
-                  [TS, TD], pv_buf)
+                  [ctx.core_id * PV_CORE_STRIDE + q_mat_idx * FIFO_SIZE * TS + pv_task_slot * TS + ctx.row_off, 0],
+                  [TS_HALF, TD], pv_buf)
     pl.system.sync_src(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=event_ids_01[ctx.l0c_idx])
     ctx.l0ab_idx = 1 - ctx.l0ab_idx
     ctx.l0c_idx = 1 - ctx.l0c_idx
@@ -224,32 +226,30 @@ def compute_pv(ctx):
 #  Vector: compute_p (softmax) / compute_gu (running output update)
 #  These access tiles from the outer kernel scope via closure.
 # ================================================================
-def compute_p(task_id):
-    """Softmax on QK tile → P.  INIT when task_id==0, UPDATE otherwise.
-    Reads from qk_buf FIFO slot, writes to p_buf FIFO slot.
-    Writes exp_corr to exp_corr_fifo[task_id % FIFO_SIZE] (UPDATE only).
+@pl.inline
+def softmax_body(task_id):
+    """Softmax body (no cross-core sync, no store). Uses row_off from closure.
+    On a2/a3 with 2 sub-blocks, each sub-block handles half the 64-row tile.
+    Both sub-blocks share row_off, so they jointly cover rows [row_off, row_off+64).
     """
     p_fifo_slot = task_id % FIFO_SIZE
     skv_off = task_id * TKV
-    pl.system.wait_cross_core(pipe=pl.PipeType.V, event_id=QK_READY_IDS[p_fifo_slot], max_event_id=QK_MAX_EID)
     plm.load(qk_vec, qk_buf, [p_fifo_slot * sq_dim + sq_off + row_off, skv_off])
     pl.system.sync_src(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.V, event_id=0)
     pl.system.sync_dst(set_pipe=pl.PipeType.MTE2, wait_pipe=pl.PipeType.V, event_id=0)
     if task_id == 0:
-        # ---- softmax INIT ----
         plm.row_max(reduce_dst, qk_vec, tmp_vec)
         pl.system.bar_v()
         plm.row_expand_sub(tmp_vec, qk_vec, reduce_dst)
-        plm.muls(global_max_cur, reduce_dst, 1.0)
+        plm.muls(global_max_rm_cur, reduce_dst_rm, 1.0)
         plm.muls(tmp_vec, tmp_vec, SCALE)
         plm.exp(qk_vec, tmp_vec)
         pl.system.bar_v()
         plm.row_sum(reduce_dst, qk_vec, tmp_vec)
         pl.system.bar_v()
-        plm.muls(global_sum_cur, reduce_dst, 1.0)
+        plm.muls(global_sum_rm_cur, reduce_dst_rm, 1.0)
         plm.cast(p_f16, qk_vec, target_type=pl.FP16, mode="round")
     if task_id > 0:
-        # ---- softmax UPDATE ----
         plm.row_max(reduce_dst, qk_vec, tmp_vec)
         pl.system.bar_v()
         plm.maximum(reduce_dst_rm, reduce_dst_rm, global_max_rm_cur)
@@ -272,12 +272,21 @@ def compute_p(task_id):
     pl.system.sync_src(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
     pl.system.sync_dst(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
     plm.store(p_buf, p_f16, [p_fifo_slot * sq_dim + sq_off + row_off, skv_off])
+    return
+
+
+@pl.inline
+def compute_p(task_id):
+    """Softmax on QK tile → P. Uses row_off from closure. Includes cross-core sync."""
+    p_fifo_slot = task_id % FIFO_SIZE
+    pl.system.wait_cross_core(pipe=pl.PipeType.V, event_id=QK_READY_IDS[p_fifo_slot], max_event_id=QK_MAX_EID)
+    softmax_body(task_id)
     pl.system.set_cross_core(pipe=pl.PipeType.MTE3, event_id=P_READY_IDS[p_fifo_slot], max_event_id=P_MAX_EID)
     return
 
 
 def compute_gu(task_id, q_count):
-    """GU: running output update.  task_id==0 → init running_o, else accumulate."""
+    """GU: running output update. Uses row_off from closure. Includes cross-core sync."""
     q_mat_idx = q_count % 2
     pv_slot = task_id % FIFO_SIZE
     pl.system.wait_cross_core(pipe=pl.PipeType.V, event_id=PV_READY_IDS[pv_slot], max_event_id=PV_MAX_EID)
@@ -329,29 +338,32 @@ def fa_perf_kernel(
         pl.system.sync_src(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=0)
         pl.system.sync_src(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=1)
 
-        ctx = pl.struct(sq_off=0, task_id=0, q_count=0, buf_idx=0, l0ab_idx=0, l0c_idx=0, core_id=core_id)
+        ctx = pl.struct(sq_off=0, row_off=0, task_id=0, q_count=0, buf_idx=0, l0ab_idx=0, l0c_idx=0, core_id=core_id)
 
         for qi in pl.range(core_id, sq_tiles, num_cores):
             ctx.sq_off = qi * TS
 
-            # ---- Prologue: pre-compute QK[0 .. QK_PRELOAD-1] ----
-            for pre in pl.range(0, QK_PRELOAD):
-                ctx.task_id = pre
-                ctx.buf_idx = (ctx.q_count * skv_tiles + pre) % 2
-                compute_qk(ctx)
+            for row_idx in pl.range(0, 2):
+                ctx.row_off = row_idx * TS_HALF
 
-            # ---- Main loop: QK[ki+preload] ahead + PV[ki] current ----
-            for ki in pl.range(0, skv_tiles):
-                next_ki = ki + QK_PRELOAD
-                if next_ki < skv_tiles:
-                    ctx.task_id = next_ki
-                    ctx.buf_idx = (ctx.q_count * skv_tiles + next_ki) % 2
+                # ---- Prologue: pre-compute QK[0 .. QK_PRELOAD-1] ----
+                for pre in pl.range(0, QK_PRELOAD):
+                    ctx.task_id = pre
+                    ctx.buf_idx = (ctx.q_count * skv_tiles + pre) % 2
                     compute_qk(ctx)
-                ctx.task_id = ki
-                ctx.buf_idx = (ctx.q_count * skv_tiles + ki) % 2
-                compute_pv(ctx)
 
-            ctx.q_count = ctx.q_count + 1
+                # ---- Main loop: QK[ki+preload] ahead + PV[ki] current ----
+                for ki in pl.range(0, skv_tiles):
+                    next_ki = ki + QK_PRELOAD
+                    if next_ki < skv_tiles:
+                        ctx.task_id = next_ki
+                        ctx.buf_idx = (ctx.q_count * skv_tiles + next_ki) % 2
+                        compute_qk(ctx)
+                    ctx.task_id = ki
+                    ctx.buf_idx = (ctx.q_count * skv_tiles + ki) % 2
+                    compute_pv(ctx)
+
+                ctx.q_count = ctx.q_count + 1
 
         pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=0)
         pl.system.sync_dst(set_pipe=pl.PipeType.MTE1, wait_pipe=pl.PipeType.MTE2, event_id=1)
@@ -363,10 +375,10 @@ def fa_perf_kernel(
         pl.system.sync_dst(set_pipe=pl.PipeType.FIX, wait_pipe=pl.PipeType.M, event_id=1)
 
     # =================== VECTOR SECTION ===================
+    # On a2/a3, two Vector sub-blocks run simultaneously, each handling half the
+    # tile rows. We iterate over row halves (row_idx 0/1) so both sub-blocks
+    # together cover all TS rows per Q tile.
     with pl.section_vector():
-        sub_id = pl.block.index_cast(pl.block.get_subblock_idx())
-        row_off = sub_id * TS_HALF
-
         qk_vec     = plm.make_tile(plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec), addr=VA0, size=VB4_KV)
         tmp_vec    = plm.make_tile(plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec), addr=VA1, size=VB4_KV)
         p_f16      = plm.make_tile(plm.TileType(shape=[TS_HALF, TKV], dtype=pl.FP16, target_memory=pl.MemorySpace.Vec), addr=VA2, size=VB2_KV)
@@ -392,7 +404,6 @@ def fa_perf_kernel(
         global_sum_rm_buf = (gsum_rm_0, gsum_rm_1)
 
         # FIFO exp_corr (by task_id % FIFO_SIZE)
-        # NOTE: update tile count here if QK_PRELOAD changes (FIFO_SIZE = QK_PRELOAD + 1)
         exp_corr_fifo, exp_corr_rm_fifo = alloc_exp_corr_fifo()
 
         running_o = plm.make_tile(plm.TileType(shape=[TS_HALF, TD], dtype=pl.FP32, target_memory=pl.MemorySpace.Vec), addr=VA7, size=VB4)
@@ -402,32 +413,35 @@ def fa_perf_kernel(
         q_count = 0
         for qi in pl.range(core_id, sq_tiles, num_cores):
             sq_off = qi * TS
-            q_idx = q_count % 2
-            # Aliases for current Q tile's global state
-            global_max_cur    = global_max_buf[q_idx]
-            global_max_rm_cur = global_max_rm_buf[q_idx]
-            global_sum_cur    = global_sum_buf[q_idx]
-            global_sum_rm_cur = global_sum_rm_buf[q_idx]
 
-            # ---- Prologue: compute_p for pre-loaded QK tiles ----
-            for pre in pl.range(0, QK_PRELOAD):
-                compute_p(pre)
+            for row_idx in pl.range(0, 2):
+                row_off = row_idx * TS_HALF
+                q_idx = q_count % 2
+                # Aliases for current Q tile's global state
+                global_max_cur    = global_max_buf[q_idx]
+                global_max_rm_cur = global_max_rm_buf[q_idx]
+                global_sum_cur    = global_sum_buf[q_idx]
+                global_sum_rm_cur = global_sum_rm_buf[q_idx]
 
-            # ---- Main loop: P[ki+preload] ahead + GU[ki] current ----
-            for ki in pl.range(0, skv_tiles):
-                next_ki = ki + QK_PRELOAD
-                if next_ki < skv_tiles:
-                    compute_p(next_ki)
-                compute_gu(ki, q_count)
+                # ---- Prologue: compute_p for pre-loaded QK tiles ----
+                for pre in pl.range(0, QK_PRELOAD):
+                    compute_p(pre)
 
-            q_count = q_count + 1
+                # ---- Main loop: P[ki+preload] ahead + GU[ki] current ----
+                for ki in pl.range(0, skv_tiles):
+                    next_ki = ki + QK_PRELOAD
+                    if next_ki < skv_tiles:
+                        compute_p(next_ki)
+                    compute_gu(ki, q_count)
 
-            # Final: normalize and store output
-            plm.row_expand_div(running_o, running_o, global_sum_cur)
-            plm.cast(o_f16, running_o, target_type=pl.FP16, mode="round")
-            pl.system.sync_src(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
-            pl.system.sync_dst(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
-            plm.store(o, o_f16, [sq_off + row_off, 0])
+                q_count = q_count + 1
+
+                # Final: normalize and store output for this row half
+                plm.row_expand_div(running_o, running_o, global_sum_cur)
+                plm.cast(o_f16, running_o, target_type=pl.FP16, mode="round")
+                pl.system.sync_src(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
+                pl.system.sync_dst(set_pipe=pl.PipeType.V, wait_pipe=pl.PipeType.MTE3, event_id=0)
+                plm.store(o, o_f16, [sq_off + row_off, 0])
     return o
 
 
@@ -442,12 +456,14 @@ def flash_attention_ref(q, k, v, d):
 
 
 def test_fa_perf():
-    compiled = fe.compile(fa_perf_kernel, arch="a3")
+    compiled = fe.compile(fa_perf_kernel, arch="a3", codegen_mode="cce")
     print("compiled:", compiled.lib_path)
     device = "npu:5"
     torch.npu.set_device(device)
     torch.manual_seed(42)
     for sq, skv, d, num_cores in [
+        (128, 128, TD, 1),
+        (512, 512, TD, 4),
         (8192, 8192, TD, 24),
     ]:
         print(f"\nFA-Perf ({sq},{skv},{d}) cores={num_cores}  QK_PRELOAD={QK_PRELOAD}")

@@ -53,6 +53,11 @@ namespace backend {
 static std::string ComputeStrideBasedOffset(codegen::CCECodegen& codegen, const std::string& tensor_var_name,
                                             const ir::MakeTuplePtr& offsets,
                                             const ir::TensorTypePtr& tensor_type) {
+  // In single-file mode: compute strides from IR tensor shape (no Tensor struct)
+  if (codegen.IsSingleFileMode()) {
+    return codegen.ComputeIRBasedOffset(tensor_type, offsets);
+  }
+
   // Get Tensor struct pointer for stride access
   std::string tensor_struct = codegen.GetTensorStruct(tensor_var_name);
 
@@ -215,9 +220,11 @@ static std::string MakeBlockStoreCodegenCCE(const ir::CallPtr& op, codegen::Code
 
   codegen.Emit("TASSIGN(" + dst_tensor_var + ", " + dst_ptr + " + " + offset + ");");
   codegen.Emit("TSTORE(" + dst_tensor_var + ", " + src_tile + ");");
-  codegen.RegisterOutputPointer(var_name, dst_tensor_var);
-  codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
-  codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
+  if (!var_name.empty()) {
+    codegen.RegisterOutputPointer(var_name, dst_tensor_var);
+    codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
+    codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
+  }
   return "";
 }
 
@@ -256,9 +263,11 @@ static std::string MakeBlockL0CStoreCodegenCCE(const ir::CallPtr& op, codegen::C
 
   codegen.Emit("TASSIGN(" + dst_tensor_var + ", " + dst_ptr + " + " + offset + ");");
   codegen.Emit("TSTORE(" + dst_tensor_var + ", " + src_tile + ");");
-  codegen.RegisterOutputPointer(var_name, dst_tensor_var);
-  codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
-  codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
+  if (!var_name.empty()) {
+    codegen.RegisterOutputPointer(var_name, dst_tensor_var);
+    codegen.RegisterOutputTensorStruct(var_name, dst_tensor_var);
+    codegen.Emit("auto " + var_name + " = " + dst_tensor_var + ";");
+  }
   return "";
 }
 
@@ -321,24 +330,10 @@ static std::string MakeBlockAllocCodegenCCE(const ir::CallPtr& op, codegen::Code
   return "";  // No C++ emission - MemRef/Tile setup handled in prologue
 }
 
-// Helper function for block.get_block_idx
+// Helper function for block.get_block_idx (returns value expression)
 static std::string MakeBlockGetBlockIdxCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
-  auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
   CHECK(op->args_.size() == 0) << "block.get_block_idx requires no arguments";
-  std::string dst = codegen.GetCurrentResultTarget();
-
-  // Get axis from kwargs
-  int axis = -1;
-  for (const auto& [key, value] : op->kwargs_) {
-    if (key == "axis") {
-      axis = std::any_cast<int>(value);
-      break;
-    }
-  }
-  CHECK(axis >= 0) << "block.get_block_idx requires 'axis' kwarg";
-
-  codegen.Emit(dst + " = GET_BLOCK_IDX(" + std::to_string(axis) + ");");
-  return "";
+  return "get_block_idx()";
 }
 
 // Helper function for block.make_tile (no-op: allocation handled elsewhere)
@@ -859,6 +854,144 @@ REGISTER_BACKEND_OP(Backend910B_CCE, "system.bar_all")
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
       dynamic_cast<codegen::CCECodegen&>(codegen_base).Emit("pipe_barrier(PIPE_ALL);");
       return "";
+    });
+
+// ============================================================================
+// Cross-core Sync Operations
+// ============================================================================
+
+// Cross-core SET: ffts_cross_core_sync(PIPE_xxx, getFFTSMsg(FFTS_MODE_VAL, event_id))
+// Cross-core WAIT: wait_flag_dev(event_id)
+// SET signals completion from a pipe; WAIT blocks until the other core signals.
+
+static std::string MakeCrossCoreSetCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base,
+                                               bool is_dynamic) {
+  auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
+  auto pipe = op->GetKwarg<int>("pipe");
+  std::string pipe_str = PipeTypeToCCEString(static_cast<ir::PipeType>(pipe));
+  if (is_dynamic) {
+    // Dynamic event_id: emit if-chain of static ffts_cross_core_sync calls.
+    int max_eid = op->GetKwarg<int>("max_event_id");
+    std::string event_id = codegen.GetExprAsCode(op->args_[0]);
+    for (int i = 0; i <= max_eid; ++i) {
+      codegen.Emit("if (" + event_id + " == " + std::to_string(i) +
+                    ") ffts_cross_core_sync(" + pipe_str + ", getFFTSMsg(FFTS_MODE_VAL, " +
+                    std::to_string(i) + "));");
+    }
+  } else {
+    int event_id = op->GetKwarg<int>("event_id");
+    codegen.Emit("ffts_cross_core_sync(" + pipe_str + ", getFFTSMsg(FFTS_MODE_VAL, " +
+                  std::to_string(event_id) + "));");
+  }
+  return "";
+}
+
+static std::string MakeCrossCoreWaitCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base,
+                                                bool is_dynamic) {
+  auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
+  if (is_dynamic) {
+    // Dynamic event_id: emit if-chain of static wait_flag_dev calls.
+    // wait_flag_dev requires compile-time constant event_id.
+    int max_eid = op->GetKwarg<int>("max_event_id");
+    std::string event_id = codegen.GetExprAsCode(op->args_[0]);
+    for (int i = 0; i <= max_eid; ++i) {
+      codegen.Emit("if (" + event_id + " == " + std::to_string(i) + ") wait_flag_dev(" +
+                    std::to_string(i) + ");");
+    }
+  } else {
+    int event_id = op->GetKwarg<int>("event_id");
+    codegen.Emit("wait_flag_dev(" + std::to_string(event_id) + ");");
+  }
+  return "";
+}
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.set_cross_core")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeCrossCoreSetCodegenCCE(op, codegen, false);
+    });
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.wait_cross_core")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeCrossCoreWaitCodegenCCE(op, codegen, false);
+    });
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.set_cross_core_dyn")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeCrossCoreSetCodegenCCE(op, codegen, true);
+    });
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.wait_cross_core_dyn")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeCrossCoreWaitCodegenCCE(op, codegen, true);
+    });
+
+// ============================================================================
+// Dynamic event_id sync operations
+// ============================================================================
+
+static std::string MakeSyncSrcDynCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+  auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
+  auto set_pipe = static_cast<ir::PipeType>(op->GetKwarg<int>("set_pipe"));
+  auto wait_pipe = static_cast<ir::PipeType>(op->GetKwarg<int>("wait_pipe"));
+  std::string event_id = codegen.GetExprAsCode(op->args_[0]);
+  std::string set_pipe_str = PipeTypeToCCEString(set_pipe);
+  std::string wait_pipe_str = PipeTypeToCCEString(wait_pipe);
+  codegen.Emit("set_flag(" + set_pipe_str + ", " + wait_pipe_str + ", (event_t)" + event_id + ");");
+  return "";
+}
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.sync_src_dyn")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeSyncSrcDynCodegenCCE(op, codegen);
+    });
+
+static std::string MakeSyncDstDynCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+  auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
+  auto set_pipe = static_cast<ir::PipeType>(op->GetKwarg<int>("set_pipe"));
+  auto wait_pipe = static_cast<ir::PipeType>(op->GetKwarg<int>("wait_pipe"));
+  std::string event_id = codegen.GetExprAsCode(op->args_[0]);
+  std::string set_pipe_str = PipeTypeToCCEString(set_pipe);
+  std::string wait_pipe_str = PipeTypeToCCEString(wait_pipe);
+  codegen.Emit("wait_flag(" + set_pipe_str + ", " + wait_pipe_str + ", (event_t)" + event_id + ");");
+  return "";
+}
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "system.sync_dst_dyn")
+    .set_pipe(ir::PipeType::S)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeSyncDstDynCodegenCCE(op, codegen);
+    });
+
+// ============================================================================
+// Missing block operations: get_block_num, get_subblock_idx, index_cast
+// ============================================================================
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "block.get_block_num")
+    .set_pipe(ir::PipeType::V)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+      CHECK(op->args_.size() == 0) << "block.get_block_num requires no arguments";
+      return std::string("get_block_num()");
+    });
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "block.get_subblock_idx")
+    .set_pipe(ir::PipeType::V)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+      CHECK(op->args_.size() == 0) << "block.get_subblock_idx requires no arguments";
+      return std::string("get_subblockid()");
+    });
+
+REGISTER_BACKEND_OP(Backend910B_CCE, "block.index_cast")
+    .set_pipe(ir::PipeType::V)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+      auto& codegen = dynamic_cast<codegen::CCECodegen&>(codegen_base);
+      CHECK(op->args_.size() == 1) << "block.index_cast requires 1 argument";
+      std::string value = codegen.GetExprAsCode(op->args_[0]);
+      return "(int32_t)(" + value + ")";
     });
 
 static std::string MakeTensorDimCodegenCCE(const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {

@@ -93,7 +93,14 @@ void BindCodegen(nb::module_& m) {
           nb::arg("program"),
           "Generate C++ code from a PyPTO IR Program. Returns a dict mapping file paths to "
           "content. Kernel functions -> kernels/<func_name>.cpp, orchestration -> "
-          "orchestration/<func_name>.cpp.");
+          "orchestration/<func_name>.cpp.")
+      .def(
+          "generate_single",
+          [](CCECodegen& self, const ProgramPtr& program) { return self.GenerateSingle(program); },
+          nb::arg("program"),
+          "Generate a single C++ file from a PyPTO IR Program (MIX mode). "
+          "Runs IR passes, generates __global__ AICORE kernel with section guards, "
+          "constexpr scalars, and FFTS support. Returns C++ code as a single string.");
 
   // OrchestrationResult - result of orchestration code generation
   nb::class_<OrchestrationResult>(codegen_module, "OrchestrationResult",
