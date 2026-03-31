@@ -318,6 +318,23 @@ class SSAConverter : public IRMutator {
                                     return_vars, op->span_);
   }
 
+  // Override SectionStmt to isolate variable scope
+  // Variables defined inside a section (cube/vector) must not leak to sibling sections.
+  StmtPtr VisitStmt_(const SectionStmtPtr& op) override {
+    EnterScope();
+    auto new_body = VisitStmt(op->body_);
+    ExitScope();
+    return std::make_shared<SectionStmt>(op->section_kind_, new_body, op->span_);
+  }
+
+  // Override ScopeStmt to isolate variable scope (e.g., pl.incore())
+  StmtPtr VisitStmt_(const ScopeStmtPtr& op) override {
+    EnterScope();
+    auto new_body = VisitStmt(op->body_);
+    ExitScope();
+    return std::make_shared<ScopeStmt>(op->scope_kind_, new_body, op->span_);
+  }
+
   // Override ForStmt to handle loop-carried variables
   StmtPtr VisitStmt_(const ForStmtPtr& op) override {
     // Visit range expressions in outer scope

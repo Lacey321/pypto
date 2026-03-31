@@ -1638,7 +1638,7 @@ class ASTParser:
                         self.scope_manager.enter_scope("scope")
                         for body_stmt in stmt.body:
                             self.parse_statement(body_stmt)
-                        self.scope_manager.exit_scope(leak_vars=True)
+                        self.scope_manager.exit_scope(leak_vars=False)
                     return
                 
                 # Handle pl.section_vector() - creates SectionStmt
@@ -1647,7 +1647,7 @@ class ASTParser:
                         self.scope_manager.enter_scope("section")
                         for body_stmt in stmt.body:
                             self.parse_statement(body_stmt)
-                        self.scope_manager.exit_scope(leak_vars=True)
+                        self.scope_manager.exit_scope(leak_vars=False)
                     return
                 
                 # Handle pl.section_cube() - creates SectionStmt
@@ -1656,7 +1656,7 @@ class ASTParser:
                         self.scope_manager.enter_scope("section")
                         for body_stmt in stmt.body:
                             self.parse_statement(body_stmt)
-                        self.scope_manager.exit_scope(leak_vars=True)
+                        self.scope_manager.exit_scope(leak_vars=False)
                     return
 
         # Unsupported context manager

@@ -36,6 +36,7 @@ pip install -e .
 - The following case is a basic testcase, you can test the basic function by this case. Precision of this case need to be checked Ok.
 ```bash
 python3 tests/ut/frontend/test_dynamic_matmul_db.py
+python3 tests/ut/frontend/flash_attention/test_fa_perf_tkv_preload.py
 ```
 For more detailed test info, look at test.md in the directory of this file(CLAUDE.md).
 ### mlir python path
