@@ -58,7 +58,7 @@ static TypePtr DeduceManualOutTileType(const std::vector<ExprPtr>& args,
 // Op registration
 // ---------------------------------------------------------------------------
 
-// manual.load: (tensor, offsets, out) -> TileType (out's type)
+// manual.load: (tensor, offsets, shapes, out) -> TileType (out's type)
 REGISTER_OP("manual.load")
     .set_op_category("ManualOp")
     .set_description(
@@ -66,10 +66,20 @@ REGISTER_OP("manual.load")
         "The output tile (last arg) defines the destination buffer; its type is returned.")
     .add_argument("tensor", "Source tensor (TensorType)")
     .add_argument("offsets", "Offset tuple per dimension (MakeTuple)")
+    .add_argument("shapes", "Shape tuple per dimension (MakeTuple)")
     .add_argument("out", "Pre-allocated destination tile (TileType)")
     .f_deduce_type([](const std::vector<ExprPtr>& args,
                       const std::vector<std::pair<std::string, std::any>>& kwargs) {
-      return DeduceManualOutTileType(args, kwargs, "manual.load", 3);
+      CHECK(args.size() == 4) << "manual.load requires 4 arguments, got " << args.size();
+      CHECK(As<TensorType>(args[0]->GetType()))
+          << "manual.load: arg 0 must be TensorType";
+      auto offsets = As<MakeTuple>(args[1]);
+      CHECK(offsets) << "manual.load: arg 1 must be MakeTuple (offsets)";
+      auto shapes = As<MakeTuple>(args[2]);
+      CHECK(shapes) << "manual.load: arg 2 must be MakeTuple (shapes)";
+      CHECK(As<TileType>(args[3]->GetType()))
+          << "manual.load: arg 3 must be TileType";
+      return args[3]->GetType();
     });
 
 // manual.store: (tile, offsets, output_tensor) -> TensorType

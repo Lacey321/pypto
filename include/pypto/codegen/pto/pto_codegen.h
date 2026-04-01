@@ -81,6 +81,16 @@ class PTOCodegen : public CodegenBase {
   std::string NewTemp();
 
   /**
+   * @brief Set the last assigned temp variable name
+   *
+   * Used by codegen functions that create multiple temporaries but need to
+   * return a specific one as the result.
+   *
+   * @param name SSA variable name to set as last assigned
+   */
+  void SetLastAssignedTemp(const std::string& name) { last_assigned_temp_ = name; }
+
+  /**
    * @brief Get or create tensor view for a variable
    *
    * @param tensor Tensor variable

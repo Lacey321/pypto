@@ -248,11 +248,12 @@ def load(
     kwargs: dict = {}
     if layout is not None:
         kwargs["layout"] = layout
-    _op(
+    shapes_tuple = _to_make_tuple(out.shape)
+    out._expr = _ir_core.create_op_call(
         "manual.load",
-        [tensor.unwrap(), _to_make_tuple(offsets)],
-        out,
-        **kwargs,
+        [tensor.unwrap(), _to_make_tuple(offsets), shapes_tuple, out.unwrap()],
+        kwargs,
+        _span(),
     )
 
 
@@ -260,18 +261,28 @@ def load_tile(
     out: Tile,
     tensor: Tensor,
     tile_offsets: Sequence[int | Expr],
+    layout: str | None = None,
 ) -> None:
     """Load data from a global tensor into a pre-allocated tile using tile-relative offsets.
 
-    The absolute offset is computed as ``absolute_offset[i] = tile_offsets[i] * shape[i]``,
-    where ``shape`` is inferred from the tile type of ``out``.
+    For N-D tensor with M-D tile (N >= M):
+    - First (N-M) offsets are used directly (batch, head indices, etc.)
+    - Last M offsets are multiplied by tile shape
+
+    Example for 4D tensor [B, N, S, D] with 2D tile [TS, TD]:
+    - ``load_tile(tile, tensor, [b, n, s_tile, d_tile])``
+    - ``b`` and ``n`` are used directly
+    - ``s_tile * TS`` and ``d_tile * TD`` are computed for the last two dims
 
     Args:
         out: Pre-allocated destination tile; rebound on return.
         tensor: Source global tensor.
-        tile_offsets: Per-dimension offsets in units of tiles (relative to tile shape).
+        tile_offsets: Per-dimension offsets. First (N-M) are direct offsets,
+            last M are tile-relative offsets.
+        layout: Tensor memory layout. ``"dn"`` for column-major (DN) layout,
+            which lets TLOAD transpose on-chip. Default is row-major (ND).
     """
-    out._expr = _ir_manual.load_tile(out.unwrap(), tensor.unwrap(), _to_make_tuple(tile_offsets))
+    out._expr = _ir_manual.load_tile(out.unwrap(), tensor.unwrap(), _to_make_tuple(tile_offsets), layout=layout)
 
 
 def store(
@@ -306,13 +317,20 @@ def store_tile(
 ) -> Tensor:
     """Store data from a tile back to a global tensor using tile-relative offsets.
 
-    The absolute offset is computed as ``absolute_offset[i] = tile_offsets[i] * shape[i]``,
-    where ``shape`` is inferred from the tile type.
+    For N-D tensor with M-D tile (N >= M):
+    - First (N-M) offsets are used directly (batch, head indices, etc.)
+    - Last M offsets are multiplied by tile shape
+
+    Example for 4D tensor [B, N, S, D] with 2D tile [TS, TD]:
+    - ``store_tile(tensor, tile, [b, n, s_tile, d_tile])``
+    - ``b`` and ``n`` are used directly
+    - ``s_tile * TS`` and ``d_tile * TD`` are computed for the last two dims
 
     Args:
         output_tensor: Destination tensor.
         tile: Source tile.
-        tile_offsets: Per-dimension offsets in units of tiles (relative to tile shape).
+        tile_offsets: Per-dimension offsets. First (N-M) are direct offsets,
+            last M are tile-relative offsets.
 
     Returns:
         Tensor wrapping the store result.

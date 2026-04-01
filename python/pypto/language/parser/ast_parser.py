@@ -2310,7 +2310,7 @@ class ASTParser:
 
         expected = len(inline_func.param_names)
         got = len(call.args)
-        if got != expected:
+        if got < expected:
             raise ParserTypeError(
                 f"Inline function '{inline_func.name}' expects {expected} argument(s), got {got}",
                 span=span,
@@ -2324,6 +2324,15 @@ class ASTParser:
         for param_name, arg_expr in zip(inline_func.param_names, arg_exprs):
             self.scope_manager.define_var(param_name, arg_expr, allow_redef=True)
 
+        # Handle extra arguments: inject them as closure variables
+        extra_closure_vars = {}
+        if got > expected:
+            for i in range(expected, got):
+                arg_node = call.args[i]
+                if isinstance(arg_node, ast.Name):
+                    var_name = arg_node.id
+                    extra_closure_vars[var_name] = arg_exprs[i]
+
         # Save parser state and switch to the inline function's context
         prev_inline_state = (self._inline_mode, self._inline_return_expr, self._inline_prefix)
         self._inline_mode = True
@@ -2332,7 +2341,7 @@ class ASTParser:
         self._inline_counter += 1
 
         prev_closure_vars = self.expr_evaluator.closure_vars
-        self.expr_evaluator.closure_vars = {**inline_func.closure_vars, **prev_closure_vars}
+        self.expr_evaluator.closure_vars = {**inline_func.closure_vars, **prev_closure_vars, **extra_closure_vars}
 
         prev_span_state = (
             self.span_tracker.source_file,
@@ -3491,6 +3500,8 @@ class ASTParser:
 
     _SCALAR_UNARY_OPS: dict[str, str] = {}
 
+    _SCALAR_BLOCK_OPS = {"index_cast"}
+
     # Maps language-level tensor operation names to IR-level names.
     _TENSOR_OP_NAME_MAP: dict[str, str] = {
         "create_tensor": "create",
@@ -3688,10 +3699,20 @@ class ASTParser:
             ir_func = getattr(ir, ir_func_name)
             return ir_func(arg, call_span)
 
+        if op_name in self._SCALAR_BLOCK_OPS:
+            if len(call.args) != 1:
+                raise InvalidOperationError(
+                    f"Scalar block operation '{op_name}' requires exactly 1 argument, got {len(call.args)}",
+                    span=call_span,
+                )
+            arg = self.parse_expression(call.args[0])
+            ir_func = getattr(ir_op.block, op_name)
+            return ir_func(arg, call_span)
+
         raise InvalidOperationError(
             f"Operation '{op_name}' is not supported for scalar arguments",
             span=call_span,
-            hint="Supported scalar ops: min, max",
+            hint="Supported scalar ops: min, max, index_cast",
         )
 
     def parse_attribute(self, attr: ast.Attribute) -> ir.Expr:
