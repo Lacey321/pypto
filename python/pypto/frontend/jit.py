@@ -637,7 +637,9 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
         # Auto-detect cross-core sync from IR
         has_cross_sync = "pto.sync.set" in mlir_code
         needs_print_debug = ("pto.tprint" in mlir_code) or ("pto.print" in mlir_code)
-        if has_cross_sync:
+        # a5 uses set_intra_block (no ffts); a2/a3 use ffts_cross_core_sync
+        has_ffts_sync = has_cross_sync and arch not in ("a5",)
+        if has_ffts_sync:
             mlir_code = _inject_set_ffts_to_mlir(mlir_code)
         with open(ir_path, "w") as f:
             f.write(mlir_code)
@@ -665,13 +667,13 @@ def compile(prog, clean_up=False, timeout=20, arch: str = "a3", enable_print_deb
         if kernel_name is None:
             raise RuntimeError("Could not find kernel name in generated C++ code")
         resolved_enable_print_debug = needs_print_debug if enable_print_debug is None else enable_print_debug
-        if has_cross_sync:
+        if has_ffts_sync:
             kernel_params = kernel_params[:-1]
         caller_content = _generate_caller_cpp(
             kernel_params=kernel_params,
             kernel_cpp_name="kernel.cpp",
             kernel_name=kernel_name,
-            has_cross_core_sync=has_cross_sync,
+            has_cross_core_sync=has_ffts_sync,
             enable_print_debug=resolved_enable_print_debug
         )
         Path(final_kernel).write_text(caller_content, encoding="utf-8")

@@ -144,6 +144,17 @@ class PTOCodegen : public CodegenBase {
   std::string GetCurrentResultTileBufTypeString() const;
 
   /**
+   * @brief Get the addr SSA name for a tile buffer (e.g., "%addr65536")
+   *
+   * Returns empty string if not found.
+   */
+  std::string GetTileAddrSSA(const std::string& tile_ssa) const {
+    auto it = tile_to_addr_ssa_.find(tile_ssa);
+    if (it != tile_to_addr_ssa_.end()) return it->second;
+    return "";
+  }
+
+  /**
    * @brief Get tile_buf type string directly from a TileType
    *
    * Unlike GetTileBufTypeString(memref), this uses the shape/layout from the
@@ -315,6 +326,8 @@ class PTOCodegen : public CodegenBase {
   std::map<const ir::MemRef*, std::shared_ptr<const ir::TileType>> memref_to_tile_type_;
   /// tile SSA → (valid_row SSA, valid_col SSA), initialised in EmitAllocTiles, updated by set_validshape
   std::map<std::string, std::pair<std::string, std::string>> tile_valid_shapes_;
+  /// tile SSA → addr SSA (i64), populated in EmitAllocTiles for use by tassign-based ops
+  std::map<std::string, std::string> tile_to_addr_ssa_;
   std::set<int64_t> emitted_constants_;
   std::set<double> emitted_float_constants_;
   std::map<double, std::string> float_const_names_;

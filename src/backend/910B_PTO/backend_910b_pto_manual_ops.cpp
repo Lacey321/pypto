@@ -827,6 +827,61 @@ REGISTER_BACKEND_OP(Backend910B_PTO, "manual.store")
       return MakeManualStoreCodegenPTO(op, codegen);
     });
 
+// ============================================================================
+// manual.insert — args = [src, index_row, index_col, dst] or
+//                        [src, index_row, index_col, offset, dst]
+// Emits: pto.tinsert ins(src, row, col : src_type, index, index) outs(dst : dst_type)
+// With offset: allocates a temporary tile at (base_addr + offset) and inserts into it.
+// ============================================================================
+static std::string MakeManualInsertCodegenPTO(const ir::CallPtr& op, codegen::CodegenBase& codegen_base) {
+  auto& codegen = dynamic_cast<codegen::PTOCodegen&>(codegen_base);
+  CHECK(op->args_.size() == 4 || op->args_.size() == 5)
+      << "manual.insert: expected 4 or 5 args, got " << op->args_.size();
+
+  bool has_offset = (op->args_.size() == 5);
+  std::string src = codegen.GetExprAsCode(op->args_[0]);
+  std::string src_type = codegen.GetExprTypeAnnotation(op->args_[0]);
+  std::string row = codegen.GetExprAsCode(op->args_[1]);
+  std::string col = codegen.GetExprAsCode(op->args_[2]);
+  std::string dst, dst_type;
+
+  if (has_offset) {
+    std::string offset = codegen.GetExprAsCode(op->args_[3]);
+    dst = codegen.GetExprAsCode(op->args_[4]);
+    dst_type = codegen.GetExprTypeAnnotation(op->args_[4]);
+
+    // Compute new address: base_addr + offset (offset is in bytes, index type)
+    std::string base_addr = codegen.GetTileAddrSSA(dst);
+    CHECK(!base_addr.empty()) << "manual.insert: cannot find base addr for tile " << dst;
+
+    // Cast offset (index) to i64 for addr arithmetic
+    std::string offset_i64 = codegen.NewTemp();
+    codegen.Emit(offset_i64 + " = arith.index_cast " + offset + " : index to i64");
+    std::string new_addr = codegen.NewTemp();
+    codegen.Emit(new_addr + " = arith.addi " + base_addr + ", " + offset_i64 + " : i64");
+
+    // Allocate a temporary tile at the offset address (same type as dst)
+    std::string tmp_tile = codegen.NewTemp();
+    codegen.Emit(tmp_tile + " = pto.alloc_tile addr = " + new_addr + " : " + dst_type);
+
+    codegen.Emit("pto.tinsert ins(" + src + ", " + row + ", " + col +
+                 " : " + src_type + ", index, index) outs(" + tmp_tile + " : " + dst_type + ")");
+  } else {
+    dst = codegen.GetExprAsCode(op->args_[3]);
+    dst_type = codegen.GetExprTypeAnnotation(op->args_[3]);
+    codegen.Emit("pto.tinsert ins(" + src + ", " + row + ", " + col +
+                 " : " + src_type + ", index, index) outs(" + dst + " : " + dst_type + ")");
+  }
+
+  return "";
+}
+
+REGISTER_BACKEND_OP(Backend910B_PTO, "manual.insert")
+    .set_pipe(ir::PipeType::MTE3)
+    .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
+      return MakeManualInsertCodegenPTO(op, codegen);
+    });
+
 REGISTER_BACKEND_OP(Backend910B_PTO, "manual.move")
     .set_pipe(ir::PipeType::MTE2)
     .f_codegen([](const ir::CallPtr& op, codegen::CodegenBase& codegen) {
