@@ -579,6 +579,9 @@ void PTOCodegen::EmitAllocTiles(const ir::FunctionPtr& func, const std::vector<i
     line << " : " << GetTileBufTypeString(memref.get());
     stream_ << GetIndent() << line.str() << "\n";
 
+    // Record tile → addr SSA mapping for ops that need to adjust tile address (e.g., tinsert with offset)
+    tile_to_addr_ssa_[tile_buf] = addr_operand;
+
     // Initialize tile→valid_shape mapping for dynamic tiles
     if (!valid_row_mlir.empty() && !valid_col_mlir.empty()) {
       UpdateTileValidShape(tile_buf, valid_row_mlir, valid_col_mlir);
